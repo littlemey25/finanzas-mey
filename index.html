@@ -548,7 +548,12 @@ function renderQuincenaBlock(label, current, next){
   }
   items.sort((a,b)=> ((a.orden??9999)-(b.orden??9999)) || a.nombre.localeCompare(b.nombre));
   items.forEach(r=>{
-    const linkTxt = r.link_type==='card' ? '💳 abono tarjeta' : r.link_type==='tasa0' ? '✓ tasa 0' : r.link_type==='porcobrar' ? '↩ por cobrar' : '';
+    const cardVinc = r.link_type==='card' ? state.cards.find(c=>c.id===r.link_id) : null;
+    const deudaVinc = r.link_type==='tasa0' ? state.deudas.find(d=>d.id===r.link_id) : null;
+    const cardDeDeuda = deudaVinc && deudaVinc.card_id ? state.cards.find(c=>c.id===deudaVinc.card_id) : null;
+    const linkTxt = r.link_type==='card' ? `💳 ${cardVinc ? cardVinc.nombre : 'tarjeta'}`
+                  : r.link_type==='tasa0' ? `✓ tasa 0${cardDeDeuda?` · 💳 ${cardDeDeuda.nombre}`:''}`
+                  : r.link_type==='porcobrar' ? '↩ por cobrar' : '';
     const esIngreso = r.tipo==='ingreso';
     const puedeEditar = r.link_type !== 'tasa0' && r.link_type !== 'porcobrar';
     const row = document.createElement('div');
