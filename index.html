@@ -40,6 +40,7 @@ body{
   letter-spacing:0.02em;
 }
 .app{max-width:920px;margin:0 auto;padding:20px 16px 90px;}
+@media(min-width:1300px){ .app{max-width:1240px;} }
 .topbar{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:18px;}
 .topbar .wordmark{font-size:30px;color:var(--text);}
 .topbar .wordmark span{color:var(--slate-light);}
@@ -81,6 +82,16 @@ nav.tabs button:not(.active):hover{color:var(--text);}
 .block{
   background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
   padding:16px;margin-bottom:14px;
+}
+.debt-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:14px;}
+.responsive-grid{display:block;}
+@media(min-width:900px){
+  .responsive-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start;}
+  .responsive-grid > .block, .responsive-grid > .debt-card{margin-bottom:0;}
+}
+@media(min-width:1300px){
+  .card-grid{grid-template-columns:repeat(3,1fr);}
+  #tasa0Grid.responsive-grid, #porCobrarList.responsive-grid{grid-template-columns:1fr 1fr 1fr;}
 }
 .block-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
 .block-head .label{font-weight:800;font-size:14px;}
@@ -215,9 +226,9 @@ nav.tabs button:not(.active):hover{color:var(--text);}
   <!-- QUINCENAS -->
   <div class="view active" id="view-quincenas">
     <button class="history-toggle" id="btnVerAnterior">← Ver quincena anterior</button>
-    <div id="quincenasBlocks"></div>
+    <div class="responsive-grid" id="quincenasBlocks"></div>
     <div class="section-head"><h2>Historial de quincenas pagadas</h2></div>
-    <div id="quincenasHistorial"></div>
+    <div class="responsive-grid" id="quincenasHistorial"></div>
   </div>
 
   <!-- TARJETAS -->
@@ -229,13 +240,13 @@ nav.tabs button:not(.active):hover{color:var(--text);}
   <!-- TASA 0 -->
   <div class="view" id="view-tasa0">
     <div class="section-head"><h2>Deudas a tasa 0</h2><button class="btn btn-primary btn-sm" id="btnNuevaDeuda">+ Préstamo</button></div>
-    <div id="tasa0Grid"></div>
+    <div id="tasa0Grid" class="responsive-grid"></div>
   </div>
 
   <!-- POR COBRAR -->
   <div class="view" id="view-porcobrar">
     <div class="section-head"><h2>Por Cobrar</h2><button class="btn btn-primary btn-sm" id="btnNuevoCobrar">+ Nuevo</button></div>
-    <div id="porCobrarList"></div>
+    <div id="porCobrarList" class="responsive-grid"></div>
   </div>
 </div>
 
@@ -432,7 +443,7 @@ function renderQuincenas(){
 
 function renderQuincenaBlock(label, current, next){
   const items = state.rubros.filter(r=>r.quincena_label===label);
-  const total = items.reduce((s,r)=>s+Number(r.monto),0);
+  const total = items.reduce((s,r)=> s + (r.tipo==='ingreso' ? -Number(r.monto) : Number(r.monto)), 0);
   const tagText = label===current ? 'quincena actual' : label===next ? 'próxima' : 'pendiente anterior';
 
   const el = document.createElement('div');
@@ -451,16 +462,17 @@ function renderQuincenaBlock(label, current, next){
   }
   items.sort((a,b)=> (a.pagado - b.pagado) || a.nombre.localeCompare(b.nombre));
   items.forEach(r=>{
-    const linkTxt = r.link_type==='card' ? '💳 abono tarjeta' : r.link_type==='tasa0' ? '✓ tasa 0' : '';
+    const linkTxt = r.link_type==='card' ? '💳 abono tarjeta' : r.link_type==='tasa0' ? '✓ tasa 0' : r.link_type==='porcobrar' ? '↩ por cobrar' : '';
+    const esIngreso = r.tipo==='ingreso';
     const row = document.createElement('div');
     row.className = 'row-item' + (r.pagado ? ' paid' : '');
     row.innerHTML = `
       <input type="checkbox" ${r.pagado?'checked':''} data-toggle="${r.id}">
       <div class="info">
         <div class="name">${r.nombre}${linkTxt?`<span class="link-tag">${linkTxt}</span>`:''}</div>
-        <div class="tag">${r.tipo==='fijo'?'Fijo':'Variable'}</div>
+        <div class="tag">${esIngreso?'Ingreso esperado':r.tipo==='fijo'?'Fijo':'Variable'}</div>
       </div>
-      <div class="amount ${r.tipo}">${colones(r.monto)}</div>
+      <div class="amount ${r.tipo}" ${esIngreso?'style="color:var(--green)"':''}>${esIngreso?'+':''}${colones(r.monto)}</div>
       <button class="del" data-delrubro="${r.id}">×</button>
     `;
     itemsBox.appendChild(row);
@@ -487,22 +499,37 @@ async function toggleRubro(id, checked, label){
   if (error) return toast('No se pudo actualizar.');
 
   if (rubro.link_type === 'card' && rubro.link_id){
-    const card = state.cards.find(c=>c.id===rubro.link_id);
-    if (card){
-      const delta = checked ? -Number(rubro.monto) : Number(rubro.monto);
-      const nuevoSaldo = Number(card.saldo_actual) + delta;
-      await sb.from('cards').update({saldo_actual: nuevoSaldo}).eq('id', card.id);
-      if (checked){
-        await sb.from('card_abonos').insert({card_id: card.id, monto: Number(rubro.monto), origen: `quincena:${label}`, fecha: new Date().toISOString().slice(0,10)});
-      } else {
-        await sb.from('card_abonos').delete().eq('card_id', card.id).eq('origen', `quincena:${label}`);
-      }
-    }
+    await applyCardDelta(rubro.link_id, rubro.monto, checked, `quincena:${label}:${rubro.id}`);
   }
   if (rubro.link_type === 'tasa0' && rubro.link_id){
     await sb.from('tasa0_pagos').update({pagado: checked}).eq('deuda_id', rubro.link_id).eq('quincena_label', label);
+    const deuda = state.deudas.find(d=>d.id===rubro.link_id);
+    if (deuda && deuda.card_id){
+      await applyCardDelta(deuda.card_id, rubro.monto, checked, `quincena:${label}:${rubro.id}`);
+    }
+  }
+  if (rubro.link_type === 'porcobrar' && rubro.link_id){
+    if (checked){
+      await sb.from('por_cobrar_abonos').insert({cobrar_id: rubro.link_id, monto: Number(rubro.monto), fecha: new Date().toISOString().slice(0,10), origen: `quincena:${label}:${rubro.id}`});
+    } else {
+      await sb.from('por_cobrar_abonos').delete().eq('cobrar_id', rubro.link_id).eq('origen', `quincena:${label}:${rubro.id}`);
+    }
   }
   await loadAll();
+}
+
+// Aplica (o revierte) un monto sobre el saldo_actual de una tarjeta y registra/quita el abono correspondiente.
+async function applyCardDelta(cardId, monto, checked, origen){
+  const card = state.cards.find(c=>c.id===cardId);
+  if (!card) return;
+  const delta = checked ? -Number(monto) : Number(monto);
+  const nuevoSaldo = Number(card.saldo_actual) + delta;
+  await sb.from('cards').update({saldo_actual: nuevoSaldo}).eq('id', cardId);
+  if (checked){
+    await sb.from('card_abonos').insert({card_id: cardId, monto: Number(monto), origen, fecha: new Date().toISOString().slice(0,10)});
+  } else {
+    await sb.from('card_abonos').delete().eq('card_id', cardId).eq('origen', origen);
+  }
 }
 
 function openRubroModal(label){
@@ -726,15 +753,17 @@ function renderTasa0(){
 
     const el = document.createElement('div');
     el.className = 'debt-card';
+    const cardVinculada = d.card_id ? state.cards.find(c=>c.id===d.card_id) : null;
     el.innerHTML = `
       <div class="debt-head">
         <div class="debt-name">${d.concepto}</div>
-        <button class="icon-btn" data-editdeuda="${d.id}" title="Editar concepto">✎</button>
+        <button class="icon-btn" data-editdeuda="${d.id}" title="Editar">✎</button>
       </div>
       <div class="badges">
         <span class="badge">${colones(d.monto_cuota)} / mes</span>
         <span class="badge">Cuota ${cuotaActual}/${d.num_cuotas}</span>
         <span class="badge">Próxima: ${proxima}</span>
+        ${cardVinculada?`<span class="badge">💳 ${cardVinculada.nombre}</span>`:''}
       </div>
       <div class="stats-row">
         <div>Pagado<b style="color:var(--green)">${colones(pagadoMonto)}</b></div>
@@ -774,11 +803,15 @@ function renderTasa0(){
 
 function openEditDeudaModal(id){
   const d = state.deudas.find(x=>x.id===id);
+  const cardOptions = state.cards.map(c=>`<option value="${c.id}" ${d.card_id===c.id?'selected':''}>${c.nombre}</option>`).join('');
   openModal(`
     <h3>Editar préstamo</h3>
     <p style="font-size:11.5px;color:var(--muted);margin-top:-6px;">El nombre se actualizará también en sus rubros de Quincenas.</p>
     <form id="f">
       <div class="field"><label>Concepto</label><input name="concepto" value="${d.concepto}" required autofocus></div>
+      <div class="field"><label>Cargado a tarjeta (opcional)</label>
+        <select name="card_id"><option value="">Ninguna</option>${cardOptions}</select>
+      </div>
       <div class="modal-actions">
         <button type="button" class="btn" id="mCancel">Cancelar</button>
         <button type="submit" class="btn btn-primary">Guardar</button>
@@ -788,14 +821,17 @@ function openEditDeudaModal(id){
   document.getElementById('mCancel').onclick = closeModal;
   document.getElementById('f').onsubmit = async (e)=>{
     e.preventDefault();
-    const nuevoConcepto = new FormData(e.target).get('concepto');
-    await sb.from('deudas_tasa0').update({concepto: nuevoConcepto}).eq('id', id);
+    const fd = new FormData(e.target);
+    const nuevoConcepto = fd.get('concepto');
+    const cardId = fd.get('card_id') || null;
+    await sb.from('deudas_tasa0').update({concepto: nuevoConcepto, card_id: cardId}).eq('id', id);
     await sb.from('rubros').update({nombre: nuevoConcepto}).eq('link_type','tasa0').eq('link_id', id);
     closeModal(); await loadAll(); toast('Actualizado.', true);
   };
 }
 
 document.getElementById('btnNuevaDeuda').onclick = ()=>{
+  const cardOptions = state.cards.map(c=>`<option value="${c.id}">${c.nombre}</option>`).join('');
   openModal(`
     <h3>Nuevo préstamo a tasa 0</h3>
     <form id="f">
@@ -805,6 +841,9 @@ document.getElementById('btnNuevaDeuda').onclick = ()=>{
         <div class="field"><label>Cantidad de meses</label><input name="meses" type="number" min="1" required></div>
       </div>
       <div class="field"><label>Fecha del día de pago (primer cobro)</label><input name="fecha" type="date" required></div>
+      <div class="field"><label>Cargado a tarjeta (opcional)</label>
+        <select name="card_id"><option value="">Ninguna — se paga aparte</option>${cardOptions}</select>
+      </div>
       <div class="modal-actions">
         <button type="button" class="btn" id="mCancel">Cancelar</button>
         <button type="submit" class="btn btn-primary">Crear</button>
@@ -819,10 +858,11 @@ document.getElementById('btnNuevaDeuda').onclick = ()=>{
     const fechaInicio = fd.get('fecha');
     const diaCobro = Number(fechaInicio.split('-')[2]);
     const montoCuota = monto / meses;
+    const cardId = fd.get('card_id') || null;
 
     const { data: deuda, error } = await sb.from('deudas_tasa0').insert({
       concepto: fd.get('concepto'), monto_total: monto, num_cuotas: meses,
-      monto_cuota: montoCuota, dia_cobro: diaCobro, fecha_inicio: fechaInicio
+      monto_cuota: montoCuota, dia_cobro: diaCobro, fecha_inicio: fechaInicio, card_id: cardId
     }).select().single();
     if (error) return toast('No se pudo crear el préstamo.');
 
@@ -857,11 +897,16 @@ function renderPorCobrar(){
     const abonos = state.porCobrarAbonos.filter(a=>a.cobrar_id===p.id);
     const abonado = abonos.reduce((s,a)=>s+Number(a.monto),0);
     const saldo = Number(p.monto_total) - abonado;
+    const cardVinculada = p.card_id ? state.cards.find(c=>c.id===p.card_id) : null;
+    const rubroVinculado = state.rubros.find(r=>r.link_type==='porcobrar' && r.link_id===p.id);
+    let vinculoTxt = '';
+    if (cardVinculada) vinculoTxt = `💳 Cargado en ${cardVinculada.nombre}`;
+    else if (rubroVinculado) vinculoTxt = `📅 ${rubroVinculado.pagado ? 'Cobrado' : 'Espera cobro'}: ${labelDisplay(rubroVinculado.quincena_label)}`;
     const el = document.createElement('div');
     el.className = 'block';
     el.innerHTML = `
       <div class="block-head">
-        <div><div class="persona-name">${p.persona}</div><div class="sub">${p.concepto||''}</div></div>
+        <div><div class="persona-name">${p.persona}</div><div class="sub">${p.concepto||''}${vinculoTxt?` · ${vinculoTxt}`:''}</div></div>
         <div style="text-align:right;">
           <div class="block-total">Saldo: <b style="color:${saldo>0?'var(--red)':'var(--green)'}">${colones(saldo)}</b></div>
         </div>
@@ -875,18 +920,35 @@ function renderPorCobrar(){
   });
   box.querySelectorAll('[data-abonocobrar]').forEach(b=> b.onclick = ()=> openAbonoCobrarModal(b.dataset.abonocobrar));
   box.querySelectorAll('[data-delcobrar]').forEach(b=> b.onclick = async ()=>{
+    await sb.from('rubros').delete().eq('link_type','porcobrar').eq('link_id', b.dataset.delcobrar);
     await sb.from('por_cobrar').delete().eq('id', b.dataset.delcobrar);
     await loadAll();
   });
 }
 
 document.getElementById('btnNuevoCobrar').onclick = ()=>{
+  const cardOptions = state.cards.map(c=>`<option value="${c.id}">${c.nombre}</option>`).join('');
   openModal(`
     <h3>Nuevo préstamo a tercero</h3>
     <form id="f">
       <div class="field"><label>Persona</label><input name="persona" required autofocus></div>
       <div class="field"><label>Concepto (opcional)</label><input name="concepto"></div>
       <div class="field"><label>Monto (₡)</label><input name="monto" type="number" step="0.01" required></div>
+      <div class="field"><label>Vínculo (opcional)</label>
+        <select name="vinculo">
+          <option value="">Ninguno</option>
+          <option value="card">Se cargó a una tarjeta mía</option>
+          <option value="quincena">Espero que me paguen en una quincena</option>
+        </select>
+      </div>
+      <div class="field" id="campoTarjeta" style="display:none;">
+        <label>Tarjeta</label>
+        <select name="card_id">${cardOptions}</select>
+      </div>
+      <div class="field" id="campoFecha" style="display:none;">
+        <label>Fecha esperada de cobro</label>
+        <input name="fecha_esperada" type="date">
+      </div>
       <div class="modal-actions">
         <button type="button" class="btn" id="mCancel">Cancelar</button>
         <button type="submit" class="btn btn-primary">Crear</button>
@@ -894,20 +956,40 @@ document.getElementById('btnNuevoCobrar').onclick = ()=>{
     </form>
   `);
   document.getElementById('mCancel').onclick = closeModal;
+  const vinculoSel = document.querySelector('#f [name=vinculo]');
+  vinculoSel.onchange = ()=>{
+    document.getElementById('campoTarjeta').style.display = vinculoSel.value==='card' ? 'block' : 'none';
+    document.getElementById('campoFecha').style.display = vinculoSel.value==='quincena' ? 'block' : 'none';
+  };
   document.getElementById('f').onsubmit = async (e)=>{
     e.preventDefault();
     const fd = new FormData(e.target);
-    const { error } = await sb.from('por_cobrar').insert({
-      persona: fd.get('persona'), concepto: fd.get('concepto'), monto_total: Number(fd.get('monto'))
-    });
+    const monto = Number(fd.get('monto'));
+    const vinculo = fd.get('vinculo');
+    const cardId = vinculo==='card' ? (fd.get('card_id') || null) : null;
+
+    const { data: cobrar, error } = await sb.from('por_cobrar').insert({
+      persona: fd.get('persona'), concepto: fd.get('concepto'), monto_total: monto, card_id: cardId
+    }).select().single();
     if (error) return toast('No se pudo crear.');
+
+    if (vinculo==='quincena' && fd.get('fecha_esperada')){
+      const fecha = new Date(fd.get('fecha_esperada') + 'T00:00:00');
+      const label = quincenaOf(fecha);
+      await sb.from('rubros').insert({
+        nombre: fd.get('persona'), monto, tipo:'ingreso', quincena_label: label,
+        link_type:'porcobrar', link_id: cobrar.id
+      });
+    }
     closeModal(); await loadAll(); toast('Registrado.', true);
   };
 };
 
 function openAbonoCobrarModal(id){
+  const p = state.porCobrar.find(x=>x.id===id);
   openModal(`
     <h3>Registrar abono</h3>
+    ${p && p.card_id ? '<p style="font-size:11.5px;color:var(--muted);margin-top:-6px;">Este préstamo está cargado a una tarjeta: el abono también restará de su saldo.</p>' : ''}
     <form id="f">
       <div class="field"><label>Monto (₡)</label><input name="monto" type="number" step="0.01" required autofocus></div>
       <div class="field"><label>Fecha</label><input name="fecha" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
@@ -921,10 +1003,19 @@ function openAbonoCobrarModal(id){
   document.getElementById('f').onsubmit = async (e)=>{
     e.preventDefault();
     const fd = new FormData(e.target);
+    const monto = Number(fd.get('monto'));
+    const fecha = fd.get('fecha');
     const { error } = await sb.from('por_cobrar_abonos').insert({
-      cobrar_id: id, monto: Number(fd.get('monto')), fecha: fd.get('fecha')
+      cobrar_id: id, monto, fecha, origen: 'manual'
     });
     if (error) return toast('No se pudo registrar.');
+    if (p && p.card_id){
+      const card = state.cards.find(c=>c.id===p.card_id);
+      if (card){
+        await sb.from('cards').update({saldo_actual: Number(card.saldo_actual) - monto}).eq('id', card.id);
+        await sb.from('card_abonos').insert({card_id: card.id, monto, origen: `porcobrar:${id}:${Date.now()}`, fecha});
+      }
+    }
     closeModal(); await loadAll(); toast('Abono registrado.', true);
   };
 }
