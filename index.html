@@ -368,6 +368,10 @@ function addMonths(label, n){
 function quincenasOfMonth(year, monthIndex){
   return [iso(year, monthIndex, 15), iso(year, monthIndex, lastDayOfMonth(year, monthIndex))];
 }
+function quincenaHalf(label){
+  const d = Number(label.split('-')[2]);
+  return d === 15 ? 'primera' : 'segunda';
+}
 function mesNombre(year, monthIndex){
   const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
   return `${meses[monthIndex]} ${year}`;
@@ -393,7 +397,8 @@ async function ensureRecurringGenerated(){
     let guard = 0;
     while (guard++ < 60){
       const yaExiste = state.rubros.some(r=> r.fijo_id===tpl.id && r.quincena_label===cursor);
-      if (!yaExiste){
+      const aplica = !tpl.aplica_a || tpl.aplica_a==='ambas' || quincenaHalf(cursor)===tpl.aplica_a;
+      if (!yaExiste && aplica){
         nuevos.push({ nombre: tpl.nombre, monto: tpl.monto, tipo:'fijo', quincena_label: cursor, link_type: tpl.link_type, link_id: tpl.link_id, fijo_id: tpl.id });
       }
       lastLabel = cursor;
@@ -544,9 +549,10 @@ function renderQuincenaBlock(label, current, next){
 
 function openEditRubroModal(id){
   const r = state.rubros.find(x=>x.id===id);
+  const tpl = r.fijo_id ? state.rubrosFijos.find(t=>t.id===r.fijo_id) : null;
   openModal(`
     <h3>Editar rubro</h3>
-    ${r.fijo_id?'<p style="font-size:11.5px;color:var(--muted);margin-top:-6px;">Es un rubro fijo recurrente: el cambio también aplicará a las quincenas futuras que aún no se han generado. Esta quincena y las ya generadas no se modifican retroactivamente.</p>':''}
+    ${r.fijo_id?'<p style="font-size:11.5px;color:var(--muted);margin-top:-6px;">Es un rubro fijo recurrente: los cambios también aplicarán a las quincenas futuras que aún no se han generado. Esta quincena y las ya generadas no se modifican retroactivamente.</p>':''}
     <form id="f">
       <div class="field"><label>Nombre</label><input name="nombre" value="${r.nombre}" required autofocus></div>
       <div class="field-row">
@@ -558,6 +564,15 @@ function openEditRubroModal(id){
           </select>
         </div>
       </div>
+      ${tpl?`
+      <div class="field">
+        <label>Este fijo se repite en...</label>
+        <select name="aplica_a">
+          <option value="ambas" ${tpl.aplica_a==='ambas'?'selected':''}>Ambas quincenas de cada mes</option>
+          <option value="primera" ${tpl.aplica_a==='primera'?'selected':''}>Solo la primera quincena (día 15)</option>
+          <option value="segunda" ${tpl.aplica_a==='segunda'?'selected':''}>Solo la segunda quincena (fin de mes)</option>
+        </select>
+      </div>`:''}
       <div class="modal-actions">
         <button type="button" class="btn" id="mCancel">Cancelar</button>
         <button type="submit" class="btn btn-primary">Guardar</button>
@@ -571,7 +586,9 @@ function openEditRubroModal(id){
     const nombre = fd.get('nombre'), monto = Number(fd.get('monto')), tipo = fd.get('tipo');
     await sb.from('rubros').update({nombre, monto, tipo}).eq('id', id);
     if (r.fijo_id){
-      await sb.from('rubros_fijos').update({nombre, monto}).eq('id', r.fijo_id);
+      const patch = { nombre, monto };
+      if (fd.get('aplica_a')) patch.aplica_a = fd.get('aplica_a');
+      await sb.from('rubros_fijos').update(patch).eq('id', r.fijo_id);
     }
     closeModal(); await loadAll(); toast('Rubro actualizado.', true);
   };
@@ -632,6 +649,14 @@ function openRubroModal(label){
           <select name="tipo"><option value="variable">Variable</option><option value="fijo">Fijo</option></select>
         </div>
       </div>
+      <div class="field" id="campoAplica" style="display:none;">
+        <label>Este fijo se repite en...</label>
+        <select name="aplica_a">
+          <option value="ambas">Ambas quincenas de cada mes</option>
+          <option value="primera">Solo la primera quincena (día 15)</option>
+          <option value="segunda">Solo la segunda quincena (fin de mes)</option>
+        </select>
+      </div>
       <div class="field"><label>Vincular con (opcional)</label>
         <select name="link"><option value="">Ninguno</option>${cardOptions}${deudaOptions}</select>
       </div>
@@ -642,6 +667,10 @@ function openRubroModal(label){
     </form>
   `);
   document.getElementById('mCancel').onclick = closeModal;
+  const tipoSel = document.querySelector('#f [name=tipo]');
+  tipoSel.onchange = ()=>{
+    document.getElementById('campoAplica').style.display = tipoSel.value==='fijo' ? 'block' : 'none';
+  };
   document.getElementById('f').onsubmit = async (e)=>{
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -652,8 +681,9 @@ function openRubroModal(label){
 
     let fijo_id = null;
     if (tipo==='fijo' && link_type!=='tasa0'){
+      const aplica_a = fd.get('aplica_a') || 'ambas';
       const { data: tpl, error: eTpl } = await sb.from('rubros_fijos').insert({
-        nombre, monto, link_type, link_id, last_generated_label: label
+        nombre, monto, link_type, link_id, last_generated_label: label, aplica_a
       }).select().single();
       if (!eTpl) fijo_id = tpl.id;
     }
