@@ -613,9 +613,12 @@ function renderQuincenaBlock(label, current, next){
 function openEditRubroModal(id){
   const r = state.rubros.find(x=>x.id===id);
   const tpl = r.fijo_id ? state.rubrosFijos.find(t=>t.id===r.fijo_id) : null;
+  const cardOptions = state.cards.map(c=>`<option value="${c.id}" ${r.link_type==='card' && r.link_id===c.id ? 'selected':''}>${c.nombre} (${c.tipo_cuenta==='debito'?'Débito':'Crédito'})</option>`).join('');
+  const linkRoto = r.link_type==='card' && r.link_id && !state.cards.some(c=>c.id===r.link_id);
   openModal(`
     <h3>Editar rubro</h3>
     ${r.fijo_id?'<p style="font-size:11.5px;color:var(--muted);margin-top:-6px;">Es un rubro fijo recurrente: los cambios también aplicarán a las quincenas futuras que aún no se han generado. Esta quincena y las ya generadas no se modifican retroactivamente.</p>':''}
+    ${linkRoto?'<p style="font-size:11.5px;color:var(--red);margin-top:-6px;">⚠ Este rubro apunta a una tarjeta que ya no existe. Elige una tarjeta abajo para corregirlo.</p>':''}
     <form id="f">
       <div class="field"><label>Nombre</label><input name="nombre" value="${r.nombre}" required autofocus></div>
       <div class="field-row">
@@ -627,6 +630,9 @@ function openEditRubroModal(id){
             <option value="ingreso" ${r.tipo==='ingreso'?'selected':''}>Ingreso</option>
           </select>
         </div>
+      </div>
+      <div class="field"><label>Vincular con tarjeta (opcional)</label>
+        <select name="card_id"><option value="">Ninguna</option>${cardOptions}</select>
       </div>
       ${tpl?`
       <div class="field">
@@ -657,9 +663,11 @@ function openEditRubroModal(id){
     e.preventDefault();
     const fd = new FormData(e.target);
     const nombre = fd.get('nombre'), monto = Number(fd.get('monto')), tipo = fd.get('tipo');
-    await sb.from('rubros').update({nombre, monto, tipo}).eq('id', id);
+    const nuevoCardId = fd.get('card_id') || null;
+    const link_type = nuevoCardId ? 'card' : null;
+    await sb.from('rubros').update({nombre, monto, tipo, link_type, link_id: nuevoCardId}).eq('id', id);
     if (r.fijo_id){
-      const patch = { nombre, monto };
+      const patch = { nombre, monto, link_type, link_id: nuevoCardId };
       if (fd.get('aplica_a')) patch.aplica_a = fd.get('aplica_a');
       await sb.from('rubros_fijos').update(patch).eq('id', r.fijo_id);
     }
@@ -701,7 +709,10 @@ async function toggleRubro(id, checked, label){
 // El sentido final también depende de si la cuenta es de crédito o de débito.
 async function applyCardDelta(cardId, monto, checked, origen, kind='abono'){
   const card = state.cards.find(c=>c.id===cardId);
-  if (!card) return;
+  if (!card){
+    toast('Este rubro está vinculado a una tarjeta que ya no existe — el saldo no se ajustó. Edítalo (✎) para volver a vincularlo.');
+    return;
+  }
   const sign = kind==='gasto' ? cargoSign(card.tipo_cuenta) : accountSign(card.tipo_cuenta);
   const delta = (checked ? 1 : -1) * sign * Number(monto);
   const nuevoSaldo = round2(Number(card.saldo_actual) + delta);
