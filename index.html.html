@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Mey · Finanzas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant:wght@500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+:root{
+  --bg:#14181D;
+  --panel:#1B2028;
+  --panel-2:#20262F;
+  --line:rgba(255,255,255,0.08);
+  --text:#E9EBEF;
+  --muted:#8A93A3;
+  --slate:#3E6E8E;
+  --slate-light:#5C8EAE;
+  --plum:#8B4E8F;
+  --plum-light:#AA6FAE;
+  --green:#4FA579;
+  --red:#D9707A;
+  --amber:#D3A24C;
+  --radius:16px;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  background:var(--bg);
+  color:var(--text);
+  font-family:'Manrope',sans-serif;
+  min-height:100vh;
+  -webkit-font-smoothing:antialiased;
+}
+.wordmark{
+  font-family:'Cormorant',serif;
+  font-weight:600;
+  font-style:normal;
+  letter-spacing:0.02em;
+}
+.app{max-width:920px;margin:0 auto;padding:20px 16px 90px;}
+.topbar{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:18px;}
+.topbar .wordmark{font-size:30px;color:var(--text);}
+.topbar .wordmark span{color:var(--slate-light);}
+.topbar .status-dot{width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block;margin-right:6px;}
+.topbar .conn{font-size:11.5px;color:var(--muted);display:flex;align-items:center;}
+
+nav.tabs{
+  display:flex;gap:6px;background:var(--panel);border:1px solid var(--line);
+  border-radius:14px;padding:5px;margin-bottom:20px;position:sticky;top:10px;z-index:20;
+  backdrop-filter:blur(8px);
+}
+nav.tabs button{
+  flex:1;background:transparent;border:none;color:var(--muted);
+  font-family:'Manrope',sans-serif;font-weight:700;font-size:12.5px;
+  padding:10px 4px;border-radius:10px;cursor:pointer;transition:background .15s, color .15s;
+}
+nav.tabs button.active{background:linear-gradient(135deg, var(--slate), var(--plum));color:#fff;}
+nav.tabs button:not(.active):hover{color:var(--text);}
+
+.view{display:none;}
+.view.active{display:block;}
+
+.section-head{display:flex;align-items:center;justify-content:space-between;margin:22px 0 10px;}
+.section-head:first-child{margin-top:0;}
+.section-head h2{font-size:14px;margin:0;color:var(--muted);font-weight:700;text-transform:none;letter-spacing:.01em;}
+
+.btn{
+  font-family:'Manrope',sans-serif;font-weight:700;font-size:12.5px;
+  background:var(--panel-2);color:var(--text);border:1px solid var(--line);
+  padding:9px 14px;border-radius:999px;cursor:pointer;transition:transform .1s, border-color .15s;
+}
+.btn:hover{border-color:var(--slate-light);}
+.btn:active{transform:scale(0.97);}
+.btn-primary{background:linear-gradient(135deg, var(--slate), var(--plum));border:none;color:#fff;}
+.btn-ghost{background:transparent;border:1px solid var(--line);}
+.btn-sm{padding:6px 11px;font-size:11.5px;}
+.btn-danger{color:var(--red);}
+
+.block{
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  padding:16px;margin-bottom:14px;
+}
+.block-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+.block-head .label{font-weight:800;font-size:14px;}
+.block-head .sub{font-size:11px;color:var(--muted);font-weight:600;}
+.block-total{font-size:12px;color:var(--muted);}
+
+.row-item{
+  display:flex;align-items:center;gap:10px;padding:10px 2px;
+  border-bottom:1px solid var(--line);
+}
+.row-item:last-child{border-bottom:none;}
+.row-item input[type=checkbox]{
+  width:19px;height:19px;accent-color:var(--green);flex:none;cursor:pointer;
+}
+.row-item .info{flex:1;min-width:0;}
+.row-item .name{font-weight:600;font-size:13.5px;}
+.row-item .tag{font-size:10.5px;color:var(--muted);margin-top:2px;}
+.row-item.paid .name{color:var(--muted);text-decoration:line-through;text-decoration-color:var(--line);}
+.row-item .amount{font-weight:700;font-size:13.5px;white-space:nowrap;}
+.row-item .amount.fijo{color:var(--slate-light);}
+.row-item .amount.variable{color:var(--text);}
+.row-item .del{color:var(--muted);background:none;border:none;cursor:pointer;font-size:15px;padding:2px 4px;}
+.row-item .del:hover{color:var(--red);}
+
+.empty{color:var(--muted);font-size:12.5px;padding:16px 4px;text-align:center;}
+
+.link-tag{
+  font-size:10px;background:rgba(62,110,142,0.18);color:var(--slate-light);
+  padding:2px 7px;border-radius:999px;margin-left:6px;
+}
+
+.history-toggle{
+  display:block;width:100%;text-align:center;color:var(--muted);font-size:12px;
+  background:none;border:1px dashed var(--line);border-radius:12px;padding:10px;
+  margin:10px 0;cursor:pointer;font-family:'Manrope',sans-serif;
+}
+
+/* --- Tarjetas --- */
+.card-grid{display:grid;grid-template-columns:1fr;gap:14px;}
+@media(min-width:640px){.card-grid{grid-template-columns:1fr 1fr;}}
+.credit-card{
+  border-radius:18px;padding:18px 20px;color:#fff;position:relative;overflow:hidden;
+  min-height:120px;display:flex;flex-direction:column;justify-content:space-between;
+}
+.credit-card.visa{background:linear-gradient(135deg,#2E5C78,#3E6E8E 55%,#5C8EAE);}
+.credit-card.amex{background:linear-gradient(135deg,#6B3B70,#8B4E8F 55%,#AA6FAE);}
+.credit-card.mastercard{background:linear-gradient(135deg,#3d3d46,#54545e);}
+.credit-card .top-row{display:flex;justify-content:space-between;align-items:flex-start;font-size:11px;opacity:.85;}
+.credit-card .balance{font-size:22px;font-weight:800;letter-spacing:.01em;}
+.credit-card .digits{font-size:12px;letter-spacing:.12em;opacity:.9;}
+.debt-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px;}
+.desglose{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);margin:10px 0 4px;}
+.desglose b{color:var(--text);display:block;font-size:14px;margin-top:2px;font-weight:800;}
+.abono-list{margin-top:10px;font-size:11.5px;color:var(--muted);}
+.abono-list .line{display:flex;justify-content:space-between;padding:4px 0;}
+.card-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;}
+.badge-sync{font-size:10px;color:var(--amber);margin-top:6px;}
+
+/* --- Tasa 0 --- */
+.progress-track{background:var(--panel-2);border-radius:999px;height:7px;overflow:hidden;margin:8px 0;}
+.progress-fill{height:100%;background:linear-gradient(90deg,var(--slate),var(--plum));}
+
+/* --- Por Cobrar --- */
+.persona-name{font-family:'Cormorant',serif;font-weight:600;font-size:19px;}
+
+/* --- Modal --- */
+.modal-bg{
+  position:fixed;inset:0;background:rgba(10,12,15,0.72);display:none;
+  align-items:flex-end;justify-content:center;z-index:100;
+}
+@media(min-width:640px){.modal-bg{align-items:center;}}
+.modal{
+  background:var(--panel);border:1px solid var(--line);width:100%;max-width:440px;
+  border-radius:20px 20px 0 0;padding:22px;max-height:88vh;overflow-y:auto;
+}
+@media(min-width:640px){.modal{border-radius:18px;}}
+.modal h3{margin:0 0 14px;font-size:16px;}
+.field{margin-bottom:12px;}
+.field label{display:block;font-size:11.5px;color:var(--muted);margin-bottom:5px;font-weight:600;}
+.field input,.field select{
+  width:100%;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;
+  color:var(--text);padding:10px 12px;font-family:'Manrope',sans-serif;font-size:13.5px;
+}
+.field input:focus,.field select:focus{outline:none;border-color:var(--slate-light);}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;}
+.field-row{display:flex;gap:10px;}
+.field-row .field{flex:1;}
+
+.toast{
+  position:fixed;bottom:18px;left:50%;transform:translateX(-50%);
+  background:var(--red);color:#fff;padding:10px 18px;border-radius:999px;
+  font-size:12.5px;font-weight:700;z-index:200;display:none;box-shadow:0 6px 20px rgba(0,0,0,.4);
+}
+.toast.ok{background:var(--green);}
+
+.setup-gate{max-width:480px;margin:60px auto;text-align:center;padding:0 20px;}
+.setup-gate p{color:var(--muted);font-size:13px;line-height:1.6;}
+.setup-gate code{background:var(--panel-2);padding:2px 6px;border-radius:6px;font-size:12px;}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="topbar">
+    <div class="wordmark">Mey<span>·</span>Finanzas</div>
+    <div class="conn"><span class="status-dot" id="connDot"></span><span id="connLabel">conectando…</span></div>
+  </div>
+
+  <nav class="tabs">
+    <button data-tab="quincenas" class="active">Quincenas</button>
+    <button data-tab="tarjetas">Tarjetas</button>
+    <button data-tab="tasa0">Tasa 0</button>
+    <button data-tab="porcobrar">Por Cobrar</button>
+  </nav>
+
+  <!-- QUINCENAS -->
+  <div class="view active" id="view-quincenas">
+    <button class="history-toggle" id="btnVerAnterior">← Ver quincena anterior</button>
+    <div id="quincenasBlocks"></div>
+    <div class="section-head"><h2>Historial de quincenas pagadas</h2></div>
+    <div id="quincenasHistorial"></div>
+  </div>
+
+  <!-- TARJETAS -->
+  <div class="view" id="view-tarjetas">
+    <div class="section-head"><h2>Tarjetas</h2><button class="btn btn-primary btn-sm" id="btnNuevaTarjeta">+ Tarjeta</button></div>
+    <div class="card-grid" id="tarjetasGrid"></div>
+  </div>
+
+  <!-- TASA 0 -->
+  <div class="view" id="view-tasa0">
+    <div class="section-head"><h2>Deudas a tasa 0</h2><button class="btn btn-primary btn-sm" id="btnNuevaDeuda">+ Préstamo</button></div>
+    <div id="tasa0Grid"></div>
+  </div>
+
+  <!-- POR COBRAR -->
+  <div class="view" id="view-porcobrar">
+    <div class="section-head"><h2>Por Cobrar</h2><button class="btn btn-primary btn-sm" id="btnNuevoCobrar">+ Nuevo</button></div>
+    <div id="porCobrarList"></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modalBg">
+  <div class="modal" id="modalBody"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* =========================================================
+   CONFIGURACIÓN — reemplaza estos dos valores con los de tu
+   proyecto Supabase (Project Settings → API).
+   ========================================================= */
+const SUPABASE_URL = 'https://qdfsyxsfjqfvyuiixllp.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_UMkxDontjmeSHAIIAhDwZQ__QPVUokG';
+</script>
+<script>
+/* =========================================================
+   Mey · Finanzas — lógica de aplicación
+   ========================================================= */
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const state = {
+  cards: [], cardAbonos: [],
+  deudas: [], tasa0Pagos: [],
+  rubros: [],
+  porCobrar: [], porCobrarAbonos: [],
+  showAnterior: false,
+};
+
+/* ---------- helpers de formato ---------- */
+const fmt = n => (Number(n) || 0).toLocaleString('es-CR', {minimumFractionDigits:2, maximumFractionDigits:2});
+const colones = n => `₡${fmt(n)}`;
+const uid = () => crypto.randomUUID();
+
+function toast(msg, ok=false){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast' + (ok ? ' ok' : '');
+  t.style.display = 'block';
+  clearTimeout(toast._t);
+  toast._t = setTimeout(()=>{ t.style.display = 'none'; }, 3200);
+}
+
+/* ---------- helpers de quincena ----------
+   Etiqueta = fecha ISO real: día 15 del mes (primera mitad) o
+   último día calendario del mes (segunda mitad). Esto evita el
+   problema de columnas "30/7" en meses con 31 días. */
+function lastDayOfMonth(year, monthIndex){
+  return new Date(year, monthIndex + 1, 0).getDate();
+}
+function iso(y,m,d){
+  return `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+}
+function quincenaOf(date){
+  const y = date.getFullYear(), m = date.getMonth(), day = date.getDate();
+  if (day <= 15) return iso(y,m,15);
+  return iso(y,m, lastDayOfMonth(y,m));
+}
+function nextQuincena(label){
+  const [y,m,d] = label.split('-').map(Number);
+  if (d === 15) return iso(y, m-1, lastDayOfMonth(y, m-1));
+  // era el último día del mes -> el 15 del mes siguiente
+  const nm = m === 12 ? 1 : m+1, ny = m === 12 ? y+1 : y;
+  return iso(ny, nm-1, 15);
+}
+function prevQuincena(label){
+  const [y,m,d] = label.split('-').map(Number);
+  if (d !== 15) return iso(y, m-1, 15);
+  const pm = m === 1 ? 12 : m-1, py = m === 1 ? y-1 : y;
+  return iso(py, pm-1, lastDayOfMonth(py, pm-1));
+}
+function labelDisplay(label){
+  const [y,m,d] = label.split('-').map(Number);
+  const meses = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+  return `${d} ${meses[m-1]} ${String(y).slice(2)}`;
+}
+function addMonths(label, n){
+  // label es 'YYYY-MM-DD' de un día de cobro (dia_cobro)
+  const [y,m,d] = label.split('-').map(Number);
+  const total = (m-1) + n;
+  const ny = y + Math.floor(total/12), nm = (total%12)+1;
+  const clampDay = Math.min(d, lastDayOfMonth(ny, nm-1));
+  return iso(ny, nm-1, clampDay);
+}
+
+/* ---------- carga de datos ---------- */
+async function loadAll(){
+  try{
+    const [cards, cardAbonos, deudas, tasa0Pagos, rubros, porCobrar, porCobrarAbonos] = await Promise.all([
+      sb.from('cards').select('*').order('orden'),
+      sb.from('card_abonos').select('*').order('fecha', {ascending:false}),
+      sb.from('deudas_tasa0').select('*').order('created_at'),
+      sb.from('tasa0_pagos').select('*'),
+      sb.from('rubros').select('*').order('quincena_label'),
+      sb.from('por_cobrar').select('*').order('created_at'),
+      sb.from('por_cobrar_abonos').select('*'),
+    ]);
+    for (const r of [cards, cardAbonos, deudas, tasa0Pagos, rubros, porCobrar, porCobrarAbonos]){
+      if (r.error) throw r.error;
+    }
+    state.cards = cards.data; state.cardAbonos = cardAbonos.data;
+    state.deudas = deudas.data; state.tasa0Pagos = tasa0Pagos.data;
+    state.rubros = rubros.data;
+    state.porCobrar = porCobrar.data; state.porCobrarAbonos = porCobrarAbonos.data;
+    setConn(true);
+    renderAll();
+  }catch(err){
+    console.error(err);
+    setConn(false);
+    toast('No se pudo conectar a la base de datos. Revisa SUPABASE_URL y SUPABASE_ANON_KEY.');
+  }
+}
+function setConn(ok){
+  document.getElementById('connDot').style.background = ok ? 'var(--green)' : 'var(--red)';
+  document.getElementById('connLabel').textContent = ok ? 'sincronizado' : 'sin conexión';
+}
+function renderAll(){
+  renderQuincenas();
+  renderTarjetas();
+  renderTasa0();
+  renderPorCobrar();
+}
+
+/* =========================================================
+   QUINCENAS
+   ========================================================= */
+function renderQuincenas(){
+  const today = new Date();
+  const current = quincenaOf(today);
+  const next = nextQuincena(current);
+  const prev = prevQuincena(current);
+
+  const labelsWithPending = [...new Set(state.rubros.filter(r=>!r.pagado).map(r=>r.quincena_label))];
+  let activeLabels = new Set([current, next, ...labelsWithPending]);
+  if (state.showAnterior) activeLabels.add(prev);
+  // no mostrar como "activa" una quincena que ya está 100% pagada y no es current/next/prev-toggled
+  activeLabels = [...activeLabels].filter(l=>{
+    const items = state.rubros.filter(r=>r.quincena_label===l);
+    const allPaid = items.length>0 && items.every(r=>r.pagado);
+    if (allPaid && l!==current && l!==next && l!==prev) return false;
+    if (allPaid && l===prev && !state.showAnterior) return false;
+    return true;
+  }).sort();
+
+  const box = document.getElementById('quincenasBlocks');
+  box.innerHTML = '';
+  activeLabels.forEach(label=>{
+    box.appendChild(renderQuincenaBlock(label, current, next));
+  });
+
+  // historial: quincenas 100% pagadas que no están activas
+  const paidLabels = [...new Set(state.rubros.map(r=>r.quincena_label))]
+    .filter(l=>!activeLabels.includes(l))
+    .filter(l=>{
+      const items = state.rubros.filter(r=>r.quincena_label===l);
+      return items.length>0 && items.every(r=>r.pagado);
+    }).sort().reverse();
+
+  const hist = document.getElementById('quincenasHistorial');
+  hist.innerHTML = '';
+  if (paidLabels.length===0){
+    hist.innerHTML = '<div class="empty">Aún no hay quincenas archivadas.</div>';
+  } else {
+    paidLabels.forEach(label=>{
+      const items = state.rubros.filter(r=>r.quincena_label===label);
+      const total = items.reduce((s,r)=>s+Number(r.monto),0);
+      const el = document.createElement('div');
+      el.className = 'block';
+      el.innerHTML = `
+        <div class="block-head">
+          <div><div class="label">${labelDisplay(label)}</div><div class="sub">${items.length} rubros</div></div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div class="block-total">${colones(total)}</div>
+            <button class="btn btn-sm btn-ghost" data-reactivar="${label}">↺ Reactivar</button>
+          </div>
+        </div>`;
+      hist.appendChild(el);
+    });
+  }
+  hist.querySelectorAll('[data-reactivar]').forEach(b=>{
+    b.onclick = async ()=>{
+      const label = b.dataset.reactivar;
+      const ids = state.rubros.filter(r=>r.quincena_label===label).map(r=>r.id);
+      const { error } = await sb.from('rubros').update({pagado:false}).in('id', ids);
+      if (error) return toast('No se pudo reactivar.');
+      await loadAll();
+      toast('Quincena reactivada.', true);
+    };
+  });
+}
+
+function renderQuincenaBlock(label, current, next){
+  const items = state.rubros.filter(r=>r.quincena_label===label);
+  const total = items.reduce((s,r)=>s+Number(r.monto),0);
+  const tagText = label===current ? 'quincena actual' : label===next ? 'próxima' : 'pendiente anterior';
+
+  const el = document.createElement('div');
+  el.className = 'block';
+  el.innerHTML = `
+    <div class="block-head">
+      <div><div class="label">${labelDisplay(label)}</div><div class="sub">${tagText}</div></div>
+      <div class="block-total">${colones(total)}</div>
+    </div>
+    <div class="items"></div>
+    <button class="btn btn-sm btn-ghost" data-addrubro="${label}" style="margin-top:6px;width:100%;">+ Rubro</button>
+  `;
+  const itemsBox = el.querySelector('.items');
+  if (items.length===0){
+    itemsBox.innerHTML = '<div class="empty">Sin rubros todavía.</div>';
+  }
+  items.sort((a,b)=> (a.pagado - b.pagado) || a.nombre.localeCompare(b.nombre));
+  items.forEach(r=>{
+    const linkTxt = r.link_type==='card' ? '💳 abono tarjeta' : r.link_type==='tasa0' ? '✓ tasa 0' : '';
+    const row = document.createElement('div');
+    row.className = 'row-item' + (r.pagado ? ' paid' : '');
+    row.innerHTML = `
+      <input type="checkbox" ${r.pagado?'checked':''} data-toggle="${r.id}">
+      <div class="info">
+        <div class="name">${r.nombre}${linkTxt?`<span class="link-tag">${linkTxt}</span>`:''}</div>
+        <div class="tag">${r.tipo==='fijo'?'Fijo':'Variable'}</div>
+      </div>
+      <div class="amount ${r.tipo}">${colones(r.monto)}</div>
+      <button class="del" data-delrubro="${r.id}">×</button>
+    `;
+    itemsBox.appendChild(row);
+  });
+
+  el.querySelectorAll('[data-toggle]').forEach(cb=>{
+    cb.onchange = ()=> toggleRubro(cb.dataset.toggle, cb.checked, label);
+  });
+  el.querySelectorAll('[data-delrubro]').forEach(b=>{
+    b.onclick = async ()=>{
+      const { error } = await sb.from('rubros').delete().eq('id', b.dataset.delrubro);
+      if (error) return toast('No se pudo eliminar.');
+      await loadAll();
+    };
+  });
+  el.querySelector('[data-addrubro]').onclick = ()=> openRubroModal(label);
+  return el;
+}
+
+async function toggleRubro(id, checked, label){
+  const rubro = state.rubros.find(r=>r.id===id);
+  if (!rubro) return;
+  const { error } = await sb.from('rubros').update({pagado:checked}).eq('id', id);
+  if (error) return toast('No se pudo actualizar.');
+
+  if (rubro.link_type === 'card' && rubro.link_id){
+    const card = state.cards.find(c=>c.id===rubro.link_id);
+    if (card){
+      const delta = checked ? -Number(rubro.monto) : Number(rubro.monto);
+      const nuevoSaldo = Number(card.saldo_actual) + delta;
+      await sb.from('cards').update({saldo_actual: nuevoSaldo}).eq('id', card.id);
+      if (checked){
+        await sb.from('card_abonos').insert({card_id: card.id, monto: Number(rubro.monto), origen: `quincena:${label}`, fecha: new Date().toISOString().slice(0,10)});
+      } else {
+        await sb.from('card_abonos').delete().eq('card_id', card.id).eq('origen', `quincena:${label}`);
+      }
+    }
+  }
+  if (rubro.link_type === 'tasa0' && rubro.link_id){
+    await sb.from('tasa0_pagos').update({pagado: checked}).eq('deuda_id', rubro.link_id).eq('quincena_label', label);
+  }
+  await loadAll();
+}
+
+function openRubroModal(label){
+  const cardOptions = state.cards.map(c=>`<option value="card:${c.id}">💳 ${c.nombre}</option>`).join('');
+  const deudaOptions = state.deudas.map(d=>`<option value="tasa0:${d.id}">✓ ${d.concepto}</option>`).join('');
+  openModal(`
+    <h3>Nuevo rubro — ${labelDisplay(label)}</h3>
+    <form id="f">
+      <div class="field"><label>Nombre</label><input name="nombre" required autofocus></div>
+      <div class="field-row">
+        <div class="field"><label>Monto (₡)</label><input name="monto" type="number" step="0.01" required></div>
+        <div class="field"><label>Tipo</label>
+          <select name="tipo"><option value="variable">Variable</option><option value="fijo">Fijo</option></select>
+        </div>
+      </div>
+      <div class="field"><label>Vincular con (opcional)</label>
+        <select name="link"><option value="">Ninguno</option>${cardOptions}${deudaOptions}</select>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="mCancel">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Agregar</button>
+      </div>
+    </form>
+  `);
+  document.getElementById('mCancel').onclick = closeModal;
+  document.getElementById('f').onsubmit = async (e)=>{
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    let link_type = null, link_id = null;
+    const link = fd.get('link');
+    if (link){ [link_type, link_id] = link.split(':'); }
+    const { error } = await sb.from('rubros').insert({
+      nombre: fd.get('nombre'), monto: Number(fd.get('monto')), tipo: fd.get('tipo'),
+      quincena_label: label, link_type, link_id
+    });
+    if (error) return toast('No se pudo guardar el rubro.');
+    closeModal();
+    await loadAll();
+    toast('Rubro agregado.', true);
+  };
+}
+
+/* =========================================================
+   TARJETAS
+   ========================================================= */
+function renderTarjetas(){
+  const grid = document.getElementById('tarjetasGrid');
+  grid.innerHTML = '';
+  if (state.cards.length===0){
+    grid.innerHTML = '<div class="empty">Aún no has agregado tarjetas.</div>';
+    return;
+  }
+  state.cards.forEach(card=>{
+    const abonado = Number(card.monto_inicial) - Number(card.saldo_actual);
+    const abonos = state.cardAbonos.filter(a=>a.card_id===card.id).slice(0,6);
+    const desdeUltima = state.cardAbonos.filter(a=>
+      a.card_id===card.id && a.origen.startsWith('quincena') &&
+      (!card.fecha_actualizacion || a.fecha > card.fecha_actualizacion)
+    ).length;
+
+    const el = document.createElement('div');
+    el.innerHTML = `
+      <div class="credit-card ${card.tipo}">
+        <div class="top-row"><span>${card.nombre}</span><span class="digits">•••• ${card.ultimos_digitos||'----'}</span></div>
+        <div><div class="balance">${colones(card.saldo_actual)}</div></div>
+      </div>
+      <div class="debt-card">
+        <div class="desglose">
+          <div>Monto inicial<b>${colones(card.monto_inicial)}</b></div>
+          <div>Abonado<b style="color:var(--green)">${colones(abonado)}</b></div>
+          <div>Saldo actual<b style="color:var(--red)">${colones(card.saldo_actual)}</b></div>
+        </div>
+        ${desdeUltima>0?`<div class="badge-sync">${desdeUltima} pago(s) aplicado(s) desde tu última actualización manual</div>`:''}
+        <div class="abono-list">
+          ${abonos.length? abonos.map(a=>`<div class="line"><span>${a.origen.startsWith('quincena')?`Quincena ${labelDisplay(a.origen.split(':')[1])}`: a.origen==='manual'?'Pago manual':'Ajuste'} — ${a.fecha}</span><span>-${colones(a.monto)}</span></div>`).join('') : '<div class="line"><span>Sin abonos registrados</span></div>'}
+        </div>
+        <div class="card-actions">
+          <button class="btn btn-sm" data-editcard="${card.id}">Actualizar saldo</button>
+          <button class="btn btn-sm" data-abonocard="${card.id}">+ Abono manual</button>
+          <button class="btn btn-sm btn-danger" data-delcard="${card.id}">Eliminar</button>
+        </div>
+      </div>
+    `;
+    grid.appendChild(el);
+  });
+
+  grid.querySelectorAll('[data-editcard]').forEach(b=> b.onclick = ()=> openEditCardModal(b.dataset.editcard));
+  grid.querySelectorAll('[data-abonocard]').forEach(b=> b.onclick = ()=> openAbonoCardModal(b.dataset.abonocard));
+  grid.querySelectorAll('[data-delcard]').forEach(b=> b.onclick = async ()=>{
+    const { error } = await sb.from('cards').delete().eq('id', b.dataset.delcard);
+    if (error) return toast('No se pudo eliminar.');
+    await loadAll();
+  });
+}
+
+document.getElementById('btnNuevaTarjeta').onclick = ()=>{
+  openModal(`
+    <h3>Nueva tarjeta</h3>
+    <form id="f">
+      <div class="field"><label>Nombre</label><input name="nombre" required autofocus placeholder="Tarjeta Cash"></div>
+      <div class="field-row">
+        <div class="field"><label>Tipo</label>
+          <select name="tipo"><option value="visa">Visa</option><option value="amex">American Express</option><option value="mastercard">Mastercard</option></select>
+        </div>
+        <div class="field"><label>Últimos 4 dígitos</label><input name="digitos" maxlength="4"></div>
+      </div>
+      <div class="field"><label>Saldo actual (₡)</label><input name="saldo" type="number" step="0.01" required></div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="mCancel">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Crear</button>
+      </div>
+    </form>
+  `);
+  document.getElementById('mCancel').onclick = closeModal;
+  document.getElementById('f').onsubmit = async (e)=>{
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const saldo = Number(fd.get('saldo'));
+    const { error } = await sb.from('cards').insert({
+      nombre: fd.get('nombre'), tipo: fd.get('tipo'), ultimos_digitos: fd.get('digitos'),
+      monto_inicial: saldo, saldo_actual: saldo, fecha_actualizacion: new Date().toISOString().slice(0,10)
+    });
+    if (error) return toast('No se pudo crear la tarjeta.');
+    closeModal(); await loadAll(); toast('Tarjeta creada.', true);
+  };
+};
+
+function openEditCardModal(id){
+  const card = state.cards.find(c=>c.id===id);
+  openModal(`
+    <h3>Actualizar saldo — ${card.nombre}</h3>
+    <p style="font-size:11.5px;color:var(--muted);margin-top:-6px;">Escribe el saldo que confirmaste con el banco. La diferencia queda registrada como ajuste.</p>
+    <form id="f">
+      <div class="field"><label>Nuevo saldo (₡)</label><input name="saldo" type="number" step="0.01" value="${card.saldo_actual}" required autofocus></div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="mCancel">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Guardar</button>
+      </div>
+    </form>
+  `);
+  document.getElementById('mCancel').onclick = closeModal;
+  document.getElementById('f').onsubmit = async (e)=>{
+    e.preventDefault();
+    const nuevo = Number(new FormData(e.target).get('saldo'));
+    const delta = Number(card.saldo_actual) - nuevo; // positivo = bajó el saldo (pago)
+    const hoy = new Date().toISOString().slice(0,10);
+    await sb.from('cards').update({saldo_actual: nuevo, fecha_actualizacion: hoy}).eq('id', id);
+    if (delta !== 0){
+      await sb.from('card_abonos').insert({card_id: id, monto: Math.abs(delta), origen: delta>0?'manual':'ajuste', fecha: hoy});
+    }
+    closeModal(); await loadAll(); toast('Saldo actualizado.', true);
+  };
+}
+
+function openAbonoCardModal(id){
+  openModal(`
+    <h3>Registrar abono manual</h3>
+    <form id="f">
+      <div class="field"><label>Monto (₡)</label><input name="monto" type="number" step="0.01" required autofocus></div>
+      <div class="field"><label>Fecha</label><input name="fecha" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="mCancel">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Registrar</button>
+      </div>
+    </form>
+  `);
+  document.getElementById('mCancel').onclick = closeModal;
+  document.getElementById('f').onsubmit = async (e)=>{
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const monto = Number(fd.get('monto'));
+    const card = state.cards.find(c=>c.id===id);
+    await sb.from('cards').update({saldo_actual: Number(card.saldo_actual)-monto}).eq('id', id);
+    await sb.from('card_abonos').insert({card_id:id, monto, origen:'manual', fecha: fd.get('fecha')});
+    closeModal(); await loadAll(); toast('Abono registrado.', true);
+  };
+}
+
+/* =========================================================
+   TASA 0
+   ========================================================= */
+function renderTasa0(){
+  const grid = document.getElementById('tasa0Grid');
+  grid.innerHTML = '';
+  if (state.deudas.length===0){
+    grid.innerHTML = '<div class="empty">No hay deudas a tasa 0 registradas.</div>';
+    return;
+  }
+  state.deudas.forEach(d=>{
+    const pagos = state.tasa0Pagos.filter(p=>p.deuda_id===d.id);
+    const pagadas = pagos.filter(p=>p.pagado).length;
+    const totalCuotasQuincenales = d.num_cuotas * 2;
+    const pct = totalCuotasQuincenales ? Math.round((pagadas/totalCuotasQuincenales)*100) : 0;
+    const el = document.createElement('div');
+    el.className = 'block';
+    el.innerHTML = `
+      <div class="block-head">
+        <div><div class="label">${d.concepto}</div><div class="sub">₡${fmt(d.monto_cuota)}/mes · ${d.num_cuotas} meses</div></div>
+        <div class="block-total">${pagadas}/${totalCuotasQuincenales}</div>
+      </div>
+      <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
+      <div class="card-actions">
+        <button class="btn btn-sm btn-danger" data-deldeuda="${d.id}">Eliminar</button>
+      </div>
+    `;
+    grid.appendChild(el);
+  });
+  grid.querySelectorAll('[data-deldeuda]').forEach(b=> b.onclick = async ()=>{
+    if (!confirm('Esto eliminará también sus rubros en Quincenas. ¿Continuar?')) return;
+    await sb.from('rubros').delete().eq('link_type','tasa0').eq('link_id', b.dataset.deldeuda);
+    await sb.from('deudas_tasa0').delete().eq('id', b.dataset.deldeuda);
+    await loadAll();
+  });
+}
+
+document.getElementById('btnNuevaDeuda').onclick = ()=>{
+  openModal(`
+    <h3>Nuevo préstamo a tasa 0</h3>
+    <form id="f">
+      <div class="field"><label>Concepto</label><input name="concepto" required autofocus placeholder="iPhone"></div>
+      <div class="field-row">
+        <div class="field"><label>Monto del préstamo (₡)</label><input name="monto" type="number" step="0.01" required></div>
+        <div class="field"><label>Cantidad de meses</label><input name="meses" type="number" min="1" required></div>
+      </div>
+      <div class="field"><label>Fecha del día de pago (primer cobro)</label><input name="fecha" type="date" required></div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="mCancel">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Crear</button>
+      </div>
+    </form>
+  `);
+  document.getElementById('mCancel').onclick = closeModal;
+  document.getElementById('f').onsubmit = async (e)=>{
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const monto = Number(fd.get('monto')), meses = Number(fd.get('meses'));
+    const fechaInicio = fd.get('fecha');
+    const diaCobro = Number(fechaInicio.split('-')[2]);
+    const montoCuota = monto / meses;
+
+    const { data: deuda, error } = await sb.from('deudas_tasa0').insert({
+      concepto: fd.get('concepto'), monto_total: monto, num_cuotas: meses,
+      monto_cuota: montoCuota, dia_cobro: diaCobro, fecha_inicio: fechaInicio
+    }).select().single();
+    if (error) return toast('No se pudo crear el préstamo.');
+
+    const rubrosNuevos = [], pagosNuevos = [];
+    for (let i=0; i<meses; i++){
+      const cobroDate = addMonths(fechaInicio, i);
+      const [y,m] = cobroDate.split('-').map(Number);
+      const q1 = iso(y, m-1, 15);
+      const q2 = iso(y, m-1, lastDayOfMonth(y, m-1));
+      [q1, q2].forEach(label=>{
+        rubrosNuevos.push({ nombre: fd.get('concepto'), monto: montoCuota/2, tipo:'fijo', quincena_label: label, link_type:'tasa0', link_id: deuda.id });
+        pagosNuevos.push({ deuda_id: deuda.id, quincena_label: label, pagado:false });
+      });
+    }
+    await sb.from('rubros').insert(rubrosNuevos);
+    await sb.from('tasa0_pagos').insert(pagosNuevos);
+    closeModal(); await loadAll(); toast('Préstamo creado y calendario generado.', true);
+  };
+};
+
+/* =========================================================
+   POR COBRAR
+   ========================================================= */
+function renderPorCobrar(){
+  const box = document.getElementById('porCobrarList');
+  box.innerHTML = '';
+  if (state.porCobrar.length===0){
+    box.innerHTML = '<div class="empty">No hay préstamos a terceros registrados.</div>';
+    return;
+  }
+  state.porCobrar.forEach(p=>{
+    const abonos = state.porCobrarAbonos.filter(a=>a.cobrar_id===p.id);
+    const abonado = abonos.reduce((s,a)=>s+Number(a.monto),0);
+    const saldo = Number(p.monto_total) - abonado;
+    const el = document.createElement('div');
+    el.className = 'block';
+    el.innerHTML = `
+      <div class="block-head">
+        <div><div class="persona-name">${p.persona}</div><div class="sub">${p.concepto||''}</div></div>
+        <div style="text-align:right;">
+          <div class="block-total">Saldo: <b style="color:${saldo>0?'var(--red)':'var(--green)'}">${colones(saldo)}</b></div>
+        </div>
+      </div>
+      <div class="card-actions">
+        <button class="btn btn-sm" data-abonocobrar="${p.id}">+ Registrar abono</button>
+        <button class="btn btn-sm btn-danger" data-delcobrar="${p.id}">Eliminar</button>
+      </div>
+    `;
+    box.appendChild(el);
+  });
+  box.querySelectorAll('[data-abonocobrar]').forEach(b=> b.onclick = ()=> openAbonoCobrarModal(b.dataset.abonocobrar));
+  box.querySelectorAll('[data-delcobrar]').forEach(b=> b.onclick = async ()=>{
+    await sb.from('por_cobrar').delete().eq('id', b.dataset.delcobrar);
+    await loadAll();
+  });
+}
+
+document.getElementById('btnNuevoCobrar').onclick = ()=>{
+  openModal(`
+    <h3>Nuevo préstamo a tercero</h3>
+    <form id="f">
+      <div class="field"><label>Persona</label><input name="persona" required autofocus></div>
+      <div class="field"><label>Concepto (opcional)</label><input name="concepto"></div>
+      <div class="field"><label>Monto (₡)</label><input name="monto" type="number" step="0.01" required></div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="mCancel">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Crear</button>
+      </div>
+    </form>
+  `);
+  document.getElementById('mCancel').onclick = closeModal;
+  document.getElementById('f').onsubmit = async (e)=>{
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const { error } = await sb.from('por_cobrar').insert({
+      persona: fd.get('persona'), concepto: fd.get('concepto'), monto_total: Number(fd.get('monto'))
+    });
+    if (error) return toast('No se pudo crear.');
+    closeModal(); await loadAll(); toast('Registrado.', true);
+  };
+};
+
+function openAbonoCobrarModal(id){
+  openModal(`
+    <h3>Registrar abono</h3>
+    <form id="f">
+      <div class="field"><label>Monto (₡)</label><input name="monto" type="number" step="0.01" required autofocus></div>
+      <div class="field"><label>Fecha</label><input name="fecha" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="mCancel">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Registrar</button>
+      </div>
+    </form>
+  `);
+  document.getElementById('mCancel').onclick = closeModal;
+  document.getElementById('f').onsubmit = async (e)=>{
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const { error } = await sb.from('por_cobrar_abonos').insert({
+      cobrar_id: id, monto: Number(fd.get('monto')), fecha: fd.get('fecha')
+    });
+    if (error) return toast('No se pudo registrar.');
+    closeModal(); await loadAll(); toast('Abono registrado.', true);
+  };
+}
+
+/* =========================================================
+   MODAL / NAV / INIT
+   ========================================================= */
+function openModal(html){
+  document.getElementById('modalBody').innerHTML = html;
+  document.getElementById('modalBg').style.display = 'flex';
+}
+function closeModal(){ document.getElementById('modalBg').style.display = 'none'; }
+document.getElementById('modalBg').addEventListener('click', (e)=>{
+  if (e.target.id === 'modalBg') closeModal();
+});
+
+document.querySelectorAll('nav.tabs button').forEach(btn=>{
+  btn.onclick = ()=>{
+    document.querySelectorAll('nav.tabs button').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('view-'+btn.dataset.tab).classList.add('active');
+  };
+});
+
+document.getElementById('btnVerAnterior').onclick = ()=>{
+  state.showAnterior = !state.showAnterior;
+  document.getElementById('btnVerAnterior').textContent = state.showAnterior ? '✕ Ocultar quincena anterior' : '← Ver quincena anterior';
+  renderQuincenas();
+};
+
+loadAll();
+
+</script>
+</body>
+</html>
