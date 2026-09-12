@@ -142,6 +142,22 @@ nav.tabs button:not(.active):hover{color:var(--text);}
 /* --- Tasa 0 --- */
 .progress-track{background:var(--panel-2);border-radius:999px;height:7px;overflow:hidden;margin:8px 0;}
 .progress-fill{height:100%;background:linear-gradient(90deg,var(--slate),var(--plum));}
+.debt-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+.debt-name{font-weight:800;font-size:15px;}
+.icon-btn{background:var(--panel-2);border:1px solid var(--line);color:var(--muted);border-radius:8px;width:30px;height:30px;cursor:pointer;font-size:13px;flex:none;}
+.icon-btn:hover{color:var(--text);border-color:var(--slate-light);}
+.badges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;}
+.badge{font-size:11px;background:rgba(139,78,143,0.18);color:var(--plum-light);padding:4px 10px;border-radius:999px;font-weight:700;white-space:nowrap;}
+.stats-row{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:2px;gap:8px;}
+.stats-row b{display:block;font-size:14px;color:var(--text);font-weight:800;margin-top:2px;}
+.cuotas-table-wrap{max-height:190px;overflow-y:auto;margin-top:10px;border:1px solid var(--line);border-radius:10px;}
+.cuotas-table{width:100%;border-collapse:collapse;font-size:12px;}
+.cuotas-table th{position:sticky;top:0;background:var(--panel-2);color:var(--muted);font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;padding:8px;text-align:left;}
+.cuotas-table td{padding:7px 8px;border-top:1px solid var(--line);white-space:nowrap;}
+.cuotas-table td:nth-child(4),.cuotas-table td:nth-child(5),.cuotas-table th:nth-child(4),.cuotas-table th:nth-child(5){text-align:center;}
+.cuotas-table input[type=checkbox]{width:16px;height:16px;accent-color:var(--green);}
+.cuotas-table tr.done td{color:var(--muted);text-decoration:line-through;text-decoration-color:var(--line);}
+.cuotas-table tr.done input{opacity:.55;}
 
 /* --- Por Cobrar --- */
 .persona-name{font-family:'Cormorant',serif;font-weight:600;font-size:19px;}
@@ -253,7 +269,7 @@ const state = {
 };
 
 /* ---------- helpers de formato ---------- */
-const fmt = n => (Number(n) || 0).toLocaleString('es-CR', {minimumFractionDigits:2, maximumFractionDigits:2});
+const fmt = n => (Number(n) || 0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
 const colones = n => `₡${fmt(n)}`;
 const uid = () => crypto.randomUUID();
 
@@ -668,6 +684,27 @@ function openAbonoCardModal(id){
 /* =========================================================
    TASA 0
    ========================================================= */
+function shortDate(isoStr){
+  const [y,m,d] = isoStr.split('-').map(Number);
+  const meses = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+  return `${d}-${meses[m-1]}`;
+}
+function tasa0Rows(deuda){
+  const pagosMap = {};
+  state.tasa0Pagos.filter(p=>p.deuda_id===deuda.id).forEach(p=>{ pagosMap[p.quincena_label] = p.pagado; });
+  const rows = [];
+  for (let i=0; i<deuda.num_cuotas; i++){
+    const cobro = addMonths(deuda.fecha_inicio, i);
+    const [y,m] = cobro.split('-').map(Number);
+    const q1 = iso(y, m-1, 15);
+    const q2 = iso(y, m-1, lastDayOfMonth(y, m-1));
+    rows.push({
+      n: i+1, fechaLabel: shortDate(cobro), monto: Number(deuda.monto_cuota),
+      q1, q2, q1paid: !!pagosMap[q1], q2paid: !!pagosMap[q2],
+    });
+  }
+  return rows;
+}
 function renderTasa0(){
   const grid = document.getElementById('tasa0Grid');
   grid.innerHTML = '';
@@ -676,18 +713,50 @@ function renderTasa0(){
     return;
   }
   state.deudas.forEach(d=>{
-    const pagos = state.tasa0Pagos.filter(p=>p.deuda_id===d.id);
-    const pagadas = pagos.filter(p=>p.pagado).length;
-    const totalCuotasQuincenales = d.num_cuotas * 2;
-    const pct = totalCuotasQuincenales ? Math.round((pagadas/totalCuotasQuincenales)*100) : 0;
+    const rows = tasa0Rows(d);
+    const pagadoMonto = rows.reduce((s,r)=> s + (r.q1paid? r.monto/2:0) + (r.q2paid? r.monto/2:0), 0);
+    const total = d.monto_total!=null ? Number(d.monto_total) : rows.reduce((s,r)=>s+r.monto,0);
+    const pendiente = total - pagadoMonto;
+    const totalQ = d.num_cuotas*2;
+    const pagadasQ = rows.reduce((s,r)=> s+(r.q1paid?1:0)+(r.q2paid?1:0), 0);
+    const pct = totalQ ? Math.round((pagadasQ/totalQ)*100) : 0;
+    const actualIdx = rows.findIndex(r=> !(r.q1paid && r.q2paid));
+    const cuotaActual = actualIdx===-1 ? d.num_cuotas : actualIdx+1;
+    const proxima = actualIdx===-1 ? 'Completado' : rows[actualIdx].fechaLabel;
+
     const el = document.createElement('div');
-    el.className = 'block';
+    el.className = 'debt-card';
     el.innerHTML = `
-      <div class="block-head">
-        <div><div class="label">${d.concepto}</div><div class="sub">₡${fmt(d.monto_cuota)}/mes · ${d.num_cuotas} meses</div></div>
-        <div class="block-total">${pagadas}/${totalCuotasQuincenales}</div>
+      <div class="debt-head">
+        <div class="debt-name">${d.concepto}</div>
+        <button class="icon-btn" data-editdeuda="${d.id}" title="Editar concepto">✎</button>
+      </div>
+      <div class="badges">
+        <span class="badge">${colones(d.monto_cuota)} / mes</span>
+        <span class="badge">Cuota ${cuotaActual}/${d.num_cuotas}</span>
+        <span class="badge">Próxima: ${proxima}</span>
+      </div>
+      <div class="stats-row">
+        <div>Pagado<b style="color:var(--green)">${colones(pagadoMonto)}</b></div>
+        <div>Pendiente<b style="color:var(--red)">${colones(pendiente)}</b></div>
+        <div>Total<b>${colones(total)}</b></div>
       </div>
       <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
+      <div class="cuotas-table-wrap">
+        <table class="cuotas-table">
+          <thead><tr><th>#</th><th>Fecha</th><th>Monto</th><th>1ª</th><th>2ª</th></tr></thead>
+          <tbody>
+            ${rows.map(r=>`
+              <tr class="${r.q1paid && r.q2paid ? 'done' : ''}">
+                <td>#${r.n}</td>
+                <td>${r.fechaLabel}</td>
+                <td>${colones(r.monto)}</td>
+                <td><input type="checkbox" disabled title="Se marca desde Quincenas" ${r.q1paid?'checked':''}></td>
+                <td><input type="checkbox" disabled title="Se marca desde Quincenas" ${r.q2paid?'checked':''}></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
       <div class="card-actions">
         <button class="btn btn-sm btn-danger" data-deldeuda="${d.id}">Eliminar</button>
       </div>
@@ -700,6 +769,30 @@ function renderTasa0(){
     await sb.from('deudas_tasa0').delete().eq('id', b.dataset.deldeuda);
     await loadAll();
   });
+  grid.querySelectorAll('[data-editdeuda]').forEach(b=> b.onclick = ()=> openEditDeudaModal(b.dataset.editdeuda));
+}
+
+function openEditDeudaModal(id){
+  const d = state.deudas.find(x=>x.id===id);
+  openModal(`
+    <h3>Editar préstamo</h3>
+    <p style="font-size:11.5px;color:var(--muted);margin-top:-6px;">El nombre se actualizará también en sus rubros de Quincenas.</p>
+    <form id="f">
+      <div class="field"><label>Concepto</label><input name="concepto" value="${d.concepto}" required autofocus></div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="mCancel">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Guardar</button>
+      </div>
+    </form>
+  `);
+  document.getElementById('mCancel').onclick = closeModal;
+  document.getElementById('f').onsubmit = async (e)=>{
+    e.preventDefault();
+    const nuevoConcepto = new FormData(e.target).get('concepto');
+    await sb.from('deudas_tasa0').update({concepto: nuevoConcepto}).eq('id', id);
+    await sb.from('rubros').update({nombre: nuevoConcepto}).eq('link_type','tasa0').eq('link_id', id);
+    closeModal(); await loadAll(); toast('Actualizado.', true);
+  };
 }
 
 document.getElementById('btnNuevaDeuda').onclick = ()=>{
