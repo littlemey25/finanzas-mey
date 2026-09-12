@@ -573,6 +573,7 @@ function openEditRubroModal(id){
           <option value="segunda" ${tpl.aplica_a==='segunda'?'selected':''}>Solo la segunda quincena (fin de mes)</option>
         </select>
       </div>`:''}
+      ${r.fijo_id?`<button type="button" class="btn btn-sm btn-danger" id="btnDeleteSerie" style="width:100%;margin-top:4px;">🗑 Eliminar esta serie fija de todas las quincenas</button>`:''}
       <div class="modal-actions">
         <button type="button" class="btn" id="mCancel">Cancelar</button>
         <button type="submit" class="btn btn-primary">Guardar</button>
@@ -580,6 +581,14 @@ function openEditRubroModal(id){
     </form>
   `);
   document.getElementById('mCancel').onclick = closeModal;
+  if (r.fijo_id){
+    document.getElementById('btnDeleteSerie').onclick = async ()=>{
+      if (!confirm('Esto eliminará este rubro de TODAS las quincenas (pasadas y futuras) y detendrá la recurrencia por completo. ¿Continuar?')) return;
+      await sb.from('rubros').delete().eq('fijo_id', r.fijo_id);
+      await sb.from('rubros_fijos').delete().eq('id', r.fijo_id);
+      closeModal(); await loadAll(); toast('Serie fija eliminada de todas las quincenas.', true);
+    };
+  }
   document.getElementById('f').onsubmit = async (e)=>{
     e.preventDefault();
     const fd = new FormData(e.target);
