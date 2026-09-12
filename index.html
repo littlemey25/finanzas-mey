@@ -314,6 +314,9 @@ const state = {
 const fmt = n => (Number(n) || 0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
 const colones = n => `₡${fmt(n)}`;
 const uid = () => crypto.randomUUID();
+// Evita que la acumulación de errores de punto flotante (ej. 465576.9866666...)
+// termine bloqueando el input nativo (step="0.01") o desalineando los centavos.
+const round2 = n => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
 // Signo de un ABONO (pago recibido/aplicado) según el tipo de cuenta:
 // crédito -> resta (baja la deuda); débito -> suma (entra dinero).
@@ -601,7 +604,7 @@ function openEditRubroModal(id){
     <form id="f">
       <div class="field"><label>Nombre</label><input name="nombre" value="${r.nombre}" required autofocus></div>
       <div class="field-row">
-        <div class="field"><label>Monto (₡)</label><input name="monto" type="number" step="0.01" value="${r.monto}" required></div>
+        <div class="field"><label>Monto (₡)</label><input name="monto" type="number" step="0.01" value="${round2(r.monto)}" required></div>
         <div class="field"><label>Tipo</label>
           <select name="tipo">
             <option value="variable" ${r.tipo==='variable'?'selected':''}>Variable</option>
@@ -681,10 +684,10 @@ async function applyCardDelta(cardId, monto, checked, origen){
   if (!card) return;
   const sign = accountSign(card.tipo_cuenta);
   const delta = (checked ? 1 : -1) * sign * Number(monto);
-  const nuevoSaldo = Number(card.saldo_actual) + delta;
+  const nuevoSaldo = round2(Number(card.saldo_actual) + delta);
   await sb.from('cards').update({saldo_actual: nuevoSaldo}).eq('id', cardId);
   if (checked){
-    await sb.from('card_abonos').insert({card_id: cardId, monto: Number(monto), origen, fecha: new Date().toISOString().slice(0,10)});
+    await sb.from('card_abonos').insert({card_id: cardId, monto: round2(monto), origen, fecha: new Date().toISOString().slice(0,10)});
   } else {
     await sb.from('card_abonos').delete().eq('card_id', cardId).eq('origen', origen);
   }
@@ -909,7 +912,7 @@ function openEditCardModal(id){
     <h3>Actualizar saldo — ${card.nombre}</h3>
     <p style="font-size:11.5px;color:var(--muted);margin-top:-6px;">Escribe el saldo que confirmaste con el banco.</p>
     <form id="f">
-      <div class="field"><label>Nuevo saldo (₡)</label><input name="saldo" type="number" step="0.01" value="${card.saldo_actual}" required autofocus></div>
+      <div class="field"><label>Nuevo saldo (₡)</label><input name="saldo" type="number" step="0.01" value="${round2(card.saldo_actual)}" required autofocus></div>
       ${pendientes.length>0?`
       <div class="field">
         <label>Se aplicaron ${colones(pendienteMonto)} en movimientos automáticos desde tu última actualización (${card.fecha_actualizacion||'—'}). ¿El monto que escribiste arriba ya los incluye?</label>
@@ -933,7 +936,8 @@ function openEditCardModal(id){
     if (pendientes.length>0 && fd.get('yaIncluye')==='no'){
       nuevo = nuevo + accountSign(card.tipo_cuenta) * pendienteMonto;
     }
-    const delta = nuevo - Number(card.saldo_actual);
+    nuevo = round2(nuevo);
+    const delta = round2(nuevo - Number(card.saldo_actual));
     await sb.from('cards').update({saldo_actual: nuevo, fecha_actualizacion: hoy}).eq('id', id);
     if (delta !== 0){
       await sb.from('card_abonos').insert({card_id: id, monto: Math.abs(delta), origen: 'ajuste', fecha: hoy});
@@ -969,7 +973,7 @@ function openAbonoCardModal(id){
     const monto = Number(fd.get('monto'));
     const esAbono = fd.get('direccion')==='abono';
     const sign = esAbono ? accountSign(card.tipo_cuenta) : cargoSign(card.tipo_cuenta);
-    await sb.from('cards').update({saldo_actual: Number(card.saldo_actual) + sign*monto}).eq('id', id);
+    await sb.from('cards').update({saldo_actual: round2(Number(card.saldo_actual) + sign*monto)}).eq('id', id);
     await sb.from('card_abonos').insert({card_id:id, monto, origen: esAbono?'manual':'cargo-manual', fecha: fd.get('fecha')});
     closeModal(); await loadAll(); toast('Movimiento registrado.', true);
   };
@@ -1124,7 +1128,7 @@ document.getElementById('btnNuevaDeuda').onclick = ()=>{
     const monto = Number(fd.get('monto')), meses = Number(fd.get('meses'));
     const fechaInicio = fd.get('fecha');
     const diaCobro = Number(fechaInicio.split('-')[2]);
-    const montoCuota = monto / meses;
+    const montoCuota = round2(monto / meses);
     const cardId = fd.get('card_id') || null;
 
     const { data: deuda, error } = await sb.from('deudas_tasa0').insert({
@@ -1140,7 +1144,7 @@ document.getElementById('btnNuevaDeuda').onclick = ()=>{
       const q1 = iso(y, m-1, 15);
       const q2 = iso(y, m-1, lastDayOfMonth(y, m-1));
       [q1, q2].forEach(label=>{
-        rubrosNuevos.push({ nombre: fd.get('concepto'), monto: montoCuota/2, tipo:'fijo', quincena_label: label, link_type:'tasa0', link_id: deuda.id, orden: nextOrdenFor(label) });
+        rubrosNuevos.push({ nombre: fd.get('concepto'), monto: round2(montoCuota/2), tipo:'fijo', quincena_label: label, link_type:'tasa0', link_id: deuda.id, orden: nextOrdenFor(label) });
         pagosNuevos.push({ deuda_id: deuda.id, quincena_label: label, pagado:false });
       });
     }
@@ -1150,7 +1154,7 @@ document.getElementById('btnNuevaDeuda').onclick = ()=>{
       const card = state.cards.find(c=>c.id===cardId);
       if (card){
         const sign = cargoSign(card.tipo_cuenta);
-        await sb.from('cards').update({saldo_actual: Number(card.saldo_actual) + sign*monto}).eq('id', cardId);
+        await sb.from('cards').update({saldo_actual: round2(Number(card.saldo_actual) + sign*monto)}).eq('id', cardId);
         await sb.from('card_abonos').insert({card_id: cardId, monto, origen: `tasa0-cargo:${deuda.id}`, fecha: fechaInicio});
       }
     }
@@ -1342,7 +1346,7 @@ function openAbonoCobrarModal(id){
       const card = state.cards.find(c=>c.id===p.card_id);
       if (card){
         const sign = accountSign(card.tipo_cuenta);
-        await sb.from('cards').update({saldo_actual: Number(card.saldo_actual) + sign*monto}).eq('id', card.id);
+        await sb.from('cards').update({saldo_actual: round2(Number(card.saldo_actual) + sign*monto)}).eq('id', card.id);
         await sb.from('card_abonos').insert({card_id: card.id, monto, origen: `porcobrar:${id}:${Date.now()}`, fecha});
       }
     }
