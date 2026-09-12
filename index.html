@@ -184,6 +184,8 @@ nav.tabs button:not(.active):hover{color:var(--text);}
 
 /* --- Por Cobrar --- */
 .persona-name{font-family:'Cormorant',serif;font-weight:600;font-size:19px;}
+.persona-row{cursor:pointer;transition:border-color .15s;}
+.persona-row:hover{border-color:var(--slate-light);}
 .abono-details{margin-top:10px;}
 .abono-details summary{
   cursor:pointer;font-size:11.5px;color:var(--slate-light);font-weight:700;
@@ -304,7 +306,7 @@ const state = {
   cards: [], cardAbonos: [],
   deudas: [], tasa0Pagos: [],
   rubros: [], rubrosFijos: [],
-  porCobrar: [], porCobrarAbonos: [],
+  porCobrar: [], porCobrarAbonos: [], porCobrarPersona: null,
   viewYear: new Date().getFullYear(), viewMonth: new Date().getMonth(), // navegación de mes en Quincenas
 };
 
@@ -1162,11 +1164,58 @@ document.getElementById('btnNuevaDeuda').onclick = ()=>{
 function renderPorCobrar(){
   const box = document.getElementById('porCobrarList');
   box.innerHTML = '';
-  if (state.porCobrar.length===0){
-    box.innerHTML = '<div class="empty">No hay préstamos a terceros registrados.</div>';
+  const btnNuevo = document.getElementById('btnNuevoCobrar');
+
+  if (!state.porCobrarPersona){
+    // Vista agrupada: una fila por persona.
+    btnNuevo.textContent = '+ Nuevo';
+    if (state.porCobrar.length===0){
+      box.innerHTML = '<div class="empty">No hay préstamos a terceros registrados.</div>';
+      return;
+    }
+    const grupos = {};
+    state.porCobrar.forEach(p=>{
+      const key = p.persona.trim();
+      (grupos[key] ??= []).push(p);
+    });
+    Object.keys(grupos).sort((a,b)=>a.localeCompare(b)).forEach(persona=>{
+      const prestamos = grupos[persona];
+      let totalPendiente = 0;
+      prestamos.forEach(p=>{
+        const abonado = state.porCobrarAbonos.filter(a=>a.cobrar_id===p.id).reduce((s,a)=>s+Number(a.monto),0);
+        totalPendiente += Number(p.monto_total) - abonado;
+      });
+      const el = document.createElement('div');
+      el.className = 'block persona-row';
+      el.innerHTML = `
+        <div class="block-head">
+          <div><div class="persona-name">${persona}</div><div class="sub">${prestamos.length} préstamo${prestamos.length>1?'s':''}</div></div>
+          <div style="text-align:right;">
+            <div class="block-total">Saldo: <b style="color:${totalPendiente>0?'var(--red)':'var(--green)'}">${colones(totalPendiente)}</b></div>
+          </div>
+        </div>
+      `;
+      el.onclick = ()=>{ state.porCobrarPersona = persona; renderPorCobrar(); };
+      box.appendChild(el);
+    });
     return;
   }
-  state.porCobrar.forEach(p=>{
+
+  // Vista detalle: préstamos de una persona en particular.
+  btnNuevo.textContent = `+ Nuevo préstamo a ${state.porCobrarPersona}`;
+  const header = document.createElement('div');
+  header.innerHTML = `
+    <button class="btn btn-sm btn-ghost" id="btnVolverPersonas">← Todas las personas</button>
+    <div class="persona-name" style="margin:12px 0 14px;font-size:22px;">${state.porCobrarPersona}</div>
+  `;
+  box.appendChild(header);
+  document.getElementById('btnVolverPersonas').onclick = ()=>{ state.porCobrarPersona = null; renderPorCobrar(); };
+
+  const prestamos = state.porCobrar.filter(p=>p.persona.trim()===state.porCobrarPersona);
+  if (prestamos.length===0){
+    box.innerHTML += '<div class="empty">Esta persona ya no tiene préstamos registrados.</div>';
+  }
+  prestamos.forEach(p=>{
     const abonos = state.porCobrarAbonos.filter(a=>a.cobrar_id===p.id).slice().sort((a,b)=> b.fecha.localeCompare(a.fecha));
     const abonado = abonos.reduce((s,a)=>s+Number(a.monto),0);
     const saldo = Number(p.monto_total) - abonado;
@@ -1180,7 +1229,7 @@ function renderPorCobrar(){
     el.className = 'block';
     el.innerHTML = `
       <div class="block-head">
-        <div><div class="persona-name">${p.persona}</div><div class="sub">${p.concepto||''}${vinculoTxt?` · ${vinculoTxt}`:''}</div></div>
+        <div><div class="label">${p.concepto||'Préstamo'}</div><div class="sub">${vinculoTxt||'Sin vínculo'}</div></div>
         <div style="text-align:right;">
           <div class="block-total">Saldo: <b style="color:${saldo>0?'var(--red)':'var(--green)'}">${colones(saldo)}</b></div>
         </div>
@@ -1211,7 +1260,7 @@ document.getElementById('btnNuevoCobrar').onclick = ()=>{
   openModal(`
     <h3>Nuevo préstamo a tercero</h3>
     <form id="f">
-      <div class="field"><label>Persona</label><input name="persona" required autofocus></div>
+      <div class="field"><label>Persona</label><input name="persona" value="${state.porCobrarPersona||''}" required autofocus></div>
       <div class="field"><label>Concepto (opcional)</label><input name="concepto"></div>
       <div class="field"><label>Monto (₡)</label><input name="monto" type="number" step="0.01" required></div>
       <div class="field"><label>Vínculo (opcional)</label>
