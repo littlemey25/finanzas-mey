@@ -180,6 +180,15 @@ nav.tabs button:not(.active):hover{color:var(--text);}
 
 /* --- Por Cobrar --- */
 .persona-name{font-family:'Cormorant',serif;font-weight:600;font-size:19px;}
+.abono-details{margin-top:10px;}
+.abono-details summary{
+  cursor:pointer;font-size:11.5px;color:var(--slate-light);font-weight:700;
+  list-style:none;padding:6px 0;user-select:none;
+}
+.abono-details summary::-webkit-details-marker{display:none;}
+.abono-details summary::before{content:'▸ ';display:inline-block;transition:transform .15s;}
+.abono-details[open] summary::before{transform:rotate(90deg);}
+.abono-details .abono-list{margin-top:4px;max-height:180px;overflow-y:auto;}
 
 /* --- Modal --- */
 .modal-bg{
@@ -1076,7 +1085,7 @@ function renderPorCobrar(){
     return;
   }
   state.porCobrar.forEach(p=>{
-    const abonos = state.porCobrarAbonos.filter(a=>a.cobrar_id===p.id);
+    const abonos = state.porCobrarAbonos.filter(a=>a.cobrar_id===p.id).slice().sort((a,b)=> b.fecha.localeCompare(a.fecha));
     const abonado = abonos.reduce((s,a)=>s+Number(a.monto),0);
     const saldo = Number(p.monto_total) - abonado;
     const cardVinculada = p.card_id ? state.cards.find(c=>c.id===p.card_id) : null;
@@ -1084,6 +1093,7 @@ function renderPorCobrar(){
     let vinculoTxt = '';
     if (cardVinculada) vinculoTxt = `💳 Cargado en ${cardVinculada.nombre}`;
     else if (rubroVinculado) vinculoTxt = `📅 ${rubroVinculado.pagado ? 'Cobrado' : 'Espera cobro'}: ${labelDisplay(rubroVinculado.quincena_label)}`;
+    const origenTxt = o => o==='manual' ? 'Abono manual' : o.startsWith('quincena') ? `Quincena ${labelDisplay(o.split(':')[1])}` : 'Abono';
     const el = document.createElement('div');
     el.className = 'block';
     el.innerHTML = `
@@ -1093,6 +1103,12 @@ function renderPorCobrar(){
           <div class="block-total">Saldo: <b style="color:${saldo>0?'var(--red)':'var(--green)'}">${colones(saldo)}</b></div>
         </div>
       </div>
+      <details class="abono-details">
+        <summary>Ver abonos (${abonos.length})</summary>
+        <div class="abono-list">
+          ${abonos.length? abonos.map(a=>`<div class="line"><span>${origenTxt(a.origen)} — ${a.fecha}</span><span>${colones(a.monto)}</span></div>`).join('') : '<div class="line"><span>Sin abonos registrados</span></div>'}
+        </div>
+      </details>
       <div class="card-actions">
         <button class="btn btn-sm" data-abonocobrar="${p.id}">+ Registrar abono</button>
         <button class="btn btn-sm btn-danger" data-delcobrar="${p.id}">Eliminar</button>
