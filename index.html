@@ -550,7 +550,7 @@ function renderQuincenaBlock(label, current, next){
       <input type="checkbox" ${r.pagado?'checked':''} data-toggle="${r.id}">
       <div class="info">
         <div class="name">${r.nombre}${r.fijo_id?' <span title="Recurrente">🔁</span>':''}${linkTxt?`<span class="link-tag">${linkTxt}</span>`:''}</div>
-        <div class="tag">${esIngreso?'Ingreso esperado':r.tipo==='fijo'?'Fijo':'Variable'}</div>
+        <div class="tag">${esIngreso?'Ingreso':r.tipo==='fijo'?'Fijo':'Variable'}</div>
       </div>
       <div class="amount ${r.tipo}" ${esIngreso?'style="color:var(--green)"':''}>${esIngreso?'+':''}${colones(r.monto)}</div>
       ${puedeEditar?`<button class="icon-btn-sm" data-editrubro="${r.id}" title="Editar">✎</button>`:''}
@@ -609,6 +609,7 @@ function openEditRubroModal(id){
           <select name="tipo">
             <option value="variable" ${r.tipo==='variable'?'selected':''}>Variable</option>
             <option value="fijo" ${r.tipo==='fijo'?'selected':''}>Fijo</option>
+            <option value="ingreso" ${r.tipo==='ingreso'?'selected':''}>Ingreso</option>
           </select>
         </div>
       </div>
@@ -658,13 +659,16 @@ async function toggleRubro(id, checked, label){
   if (error) return toast('No se pudo actualizar.');
 
   if (rubro.link_type === 'card' && rubro.link_id){
-    await applyCardDelta(rubro.link_id, rubro.monto, checked, `quincena:${label}:${rubro.id}`);
+    // Un rubro normal (fijo/variable) vinculado a una tarjeta es un GASTO: sale dinero (débito)
+    // o aumenta la deuda (crédito). Un rubro de tipo "ingreso" es lo contrario: es dinero que entra.
+    const kind = rubro.tipo === 'ingreso' ? 'abono' : 'gasto';
+    await applyCardDelta(rubro.link_id, rubro.monto, checked, `quincena:${label}:${rubro.id}`, kind);
   }
   if (rubro.link_type === 'tasa0' && rubro.link_id){
     await sb.from('tasa0_pagos').update({pagado: checked}).eq('deuda_id', rubro.link_id).eq('quincena_label', label);
     const deuda = state.deudas.find(d=>d.id===rubro.link_id);
     if (deuda && deuda.card_id){
-      await applyCardDelta(deuda.card_id, rubro.monto, checked, `quincena:${label}:${rubro.id}`);
+      await applyCardDelta(deuda.card_id, rubro.monto, checked, `quincena:${label}:${rubro.id}`, 'abono');
     }
   }
   if (rubro.link_type === 'porcobrar' && rubro.link_id){
@@ -677,12 +681,13 @@ async function toggleRubro(id, checked, label){
   await loadAll();
 }
 
-// Aplica (o revierte) un abono sobre el saldo_actual de una tarjeta y registra/quita el movimiento.
-// El sentido (suma o resta) depende de si la cuenta es de crédito o de débito.
-async function applyCardDelta(cardId, monto, checked, origen){
+// Aplica (o revierte) un movimiento sobre el saldo_actual de una tarjeta y registra/quita el movimiento.
+// kind: 'abono' (dinero entra o baja la deuda) | 'gasto' (dinero sale o sube la deuda).
+// El sentido final también depende de si la cuenta es de crédito o de débito.
+async function applyCardDelta(cardId, monto, checked, origen, kind='abono'){
   const card = state.cards.find(c=>c.id===cardId);
   if (!card) return;
-  const sign = accountSign(card.tipo_cuenta);
+  const sign = kind==='gasto' ? cargoSign(card.tipo_cuenta) : accountSign(card.tipo_cuenta);
   const delta = (checked ? 1 : -1) * sign * Number(monto);
   const nuevoSaldo = round2(Number(card.saldo_actual) + delta);
   await sb.from('cards').update({saldo_actual: nuevoSaldo}).eq('id', cardId);
@@ -703,7 +708,7 @@ function openRubroModal(label){
       <div class="field-row">
         <div class="field"><label>Monto (₡)</label><input name="monto" type="number" step="0.01" required></div>
         <div class="field"><label>Tipo</label>
-          <select name="tipo"><option value="variable">Variable</option><option value="fijo">Fijo</option></select>
+          <select name="tipo"><option value="variable">Variable</option><option value="fijo">Fijo</option><option value="ingreso">Ingreso</option></select>
         </div>
       </div>
       <div class="field" id="campoAplica" style="display:none;">
