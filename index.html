@@ -513,7 +513,17 @@ async function reorderRubros(label, draggedId, targetId){
   if (fromIdx===-1 || toIdx===-1) return;
   const [moved] = items.splice(fromIdx, 1);
   items.splice(toIdx, 0, moved);
-  await Promise.all(items.map((r,idx)=> sb.from('rubros').update({orden: idx}).eq('id', r.id)));
+
+  // Aplica el mismo orden a esta quincena y, por nombre, a las demás quincenas
+  // que tengan un rubro igual (así no hay que reordenar una por una).
+  const updates = [];
+  items.forEach((r, idx)=>{
+    updates.push(sb.from('rubros').update({orden: idx}).eq('id', r.id));
+    state.rubros
+      .filter(other => other.quincena_label !== label && other.nombre === r.nombre)
+      .forEach(other => updates.push(sb.from('rubros').update({orden: idx}).eq('id', other.id)));
+  });
+  await Promise.all(updates);
   await loadAll();
 }
 
