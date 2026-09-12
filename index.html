@@ -102,6 +102,10 @@ nav.tabs button:not(.active):hover{color:var(--text);}
   display:flex;align-items:center;gap:10px;padding:10px 2px;
   border-bottom:1px solid var(--line);
 }
+.row-item.dragging{opacity:0.4;}
+.row-item.drag-over{border-top:2px solid var(--slate-light);}
+.drag-handle{color:var(--muted);cursor:grab;flex:none;font-size:14px;user-select:none;}
+.drag-handle:active{cursor:grabbing;}
 .row-item:last-child{border-bottom:none;}
 .row-item input[type=checkbox]{
   width:19px;height:19px;accent-color:var(--green);flex:none;cursor:pointer;
@@ -381,6 +385,10 @@ function pendientesAnteriores(){
   return [...new Set(state.rubros.filter(r=>!r.pagado).map(r=>r.quincena_label))]
     .filter(l => l < current).sort();
 }
+function nextOrdenFor(label){
+  const existing = state.rubros.filter(r=>r.quincena_label===label).map(r=> r.orden ?? -1);
+  return existing.length ? Math.max(...existing)+1 : 0;
+}
 
 /* ---------- rubros fijos recurrentes ----------
    Cada plantilla activa debe tener una instancia generada en `rubros`
@@ -399,7 +407,7 @@ async function ensureRecurringGenerated(){
       const yaExiste = state.rubros.some(r=> r.fijo_id===tpl.id && r.quincena_label===cursor);
       const aplica = !tpl.aplica_a || tpl.aplica_a==='ambas' || quincenaHalf(cursor)===tpl.aplica_a;
       if (!yaExiste && aplica){
-        nuevos.push({ nombre: tpl.nombre, monto: tpl.monto, tipo:'fijo', quincena_label: cursor, link_type: tpl.link_type, link_id: tpl.link_id, fijo_id: tpl.id });
+        nuevos.push({ nombre: tpl.nombre, monto: tpl.monto, tipo:'fijo', quincena_label: cursor, link_type: tpl.link_type, link_id: tpl.link_id, fijo_id: tpl.id, orden: nextOrdenFor(cursor) });
       }
       lastLabel = cursor;
       if (cursor === next) break;
@@ -491,6 +499,19 @@ function tagFor(label, current, next){
   return label < current ? 'quincena pasada' : 'quincena futura';
 }
 
+const dragState = { id: null };
+async function reorderRubros(label, draggedId, targetId){
+  const items = state.rubros.filter(r=>r.quincena_label===label)
+    .sort((a,b)=> ((a.orden??9999)-(b.orden??9999)) || a.nombre.localeCompare(b.nombre));
+  const fromIdx = items.findIndex(r=>r.id===draggedId);
+  const toIdx = items.findIndex(r=>r.id===targetId);
+  if (fromIdx===-1 || toIdx===-1) return;
+  const [moved] = items.splice(fromIdx, 1);
+  items.splice(toIdx, 0, moved);
+  await Promise.all(items.map((r,idx)=> sb.from('rubros').update({orden: idx}).eq('id', r.id)));
+  await loadAll();
+}
+
 function renderQuincenaBlock(label, current, next){
   const items = state.rubros.filter(r=>r.quincena_label===label);
   const total = items.reduce((s,r)=> s + (r.tipo==='ingreso' ? -Number(r.monto) : Number(r.monto)), 0);
@@ -510,14 +531,17 @@ function renderQuincenaBlock(label, current, next){
   if (items.length===0){
     itemsBox.innerHTML = '<div class="empty">Sin rubros todavía.</div>';
   }
-  items.sort((a,b)=> (a.pagado - b.pagado) || a.nombre.localeCompare(b.nombre));
+  items.sort((a,b)=> ((a.orden??9999)-(b.orden??9999)) || a.nombre.localeCompare(b.nombre));
   items.forEach(r=>{
     const linkTxt = r.link_type==='card' ? '💳 abono tarjeta' : r.link_type==='tasa0' ? '✓ tasa 0' : r.link_type==='porcobrar' ? '↩ por cobrar' : '';
     const esIngreso = r.tipo==='ingreso';
     const puedeEditar = r.link_type !== 'tasa0' && r.link_type !== 'porcobrar';
     const row = document.createElement('div');
     row.className = 'row-item' + (r.pagado ? ' paid' : '');
+    row.draggable = true;
+    row.dataset.rubroId = r.id;
     row.innerHTML = `
+      <span class="drag-handle" title="Arrastrar para reordenar">⠿</span>
       <input type="checkbox" ${r.pagado?'checked':''} data-toggle="${r.id}">
       <div class="info">
         <div class="name">${r.nombre}${r.fijo_id?' <span title="Recurrente">🔁</span>':''}${linkTxt?`<span class="link-tag">${linkTxt}</span>`:''}</div>
@@ -528,6 +552,25 @@ function renderQuincenaBlock(label, current, next){
       <button class="del" data-delrubro="${r.id}">×</button>
     `;
     itemsBox.appendChild(row);
+  });
+
+  // Arrastrar y soltar para reordenar manualmente dentro de esta quincena.
+  itemsBox.querySelectorAll('.row-item').forEach(rowEl=>{
+    rowEl.addEventListener('dragstart', ()=>{
+      dragState.id = rowEl.dataset.rubroId;
+      rowEl.classList.add('dragging');
+    });
+    rowEl.addEventListener('dragend', ()=> rowEl.classList.remove('dragging'));
+    rowEl.addEventListener('dragover', e=>{ e.preventDefault(); rowEl.classList.add('drag-over'); });
+    rowEl.addEventListener('dragleave', ()=> rowEl.classList.remove('drag-over'));
+    rowEl.addEventListener('drop', async e=>{
+      e.preventDefault();
+      rowEl.classList.remove('drag-over');
+      const targetId = rowEl.dataset.rubroId;
+      if (!dragState.id || dragState.id===targetId) return;
+      await reorderRubros(label, dragState.id, targetId);
+      dragState.id = null;
+    });
   });
 
   el.querySelectorAll('[data-toggle]').forEach(cb=>{
@@ -698,7 +741,7 @@ function openRubroModal(label){
     }
 
     const { error } = await sb.from('rubros').insert({
-      nombre, monto, tipo, quincena_label: label, link_type, link_id, fijo_id
+      nombre, monto, tipo, quincena_label: label, link_type, link_id, fijo_id, orden: nextOrdenFor(label)
     });
     if (error) return toast('No se pudo guardar el rubro.');
     closeModal();
@@ -1095,7 +1138,7 @@ document.getElementById('btnNuevaDeuda').onclick = ()=>{
       const q1 = iso(y, m-1, 15);
       const q2 = iso(y, m-1, lastDayOfMonth(y, m-1));
       [q1, q2].forEach(label=>{
-        rubrosNuevos.push({ nombre: fd.get('concepto'), monto: montoCuota/2, tipo:'fijo', quincena_label: label, link_type:'tasa0', link_id: deuda.id });
+        rubrosNuevos.push({ nombre: fd.get('concepto'), monto: montoCuota/2, tipo:'fijo', quincena_label: label, link_type:'tasa0', link_id: deuda.id, orden: nextOrdenFor(label) });
         pagosNuevos.push({ deuda_id: deuda.id, quincena_label: label, pagado:false });
       });
     }
@@ -1215,7 +1258,7 @@ document.getElementById('btnNuevoCobrar').onclick = ()=>{
       const label = quincenaOf(fecha);
       await sb.from('rubros').insert({
         nombre: fd.get('persona'), monto, tipo:'ingreso', quincena_label: label,
-        link_type:'porcobrar', link_id: cobrar.id
+        link_type:'porcobrar', link_id: cobrar.id, orden: nextOrdenFor(label)
       });
     }
     closeModal(); await loadAll(); toast('Registrado.', true);
