@@ -631,7 +631,7 @@ function openEditRubroModal(id){
           </select>
         </div>
       </div>
-      <div class="field"><label>Vincular con tarjeta (opcional)</label>
+      <div class="field"><label>Vincular con tarjeta de crédito (opcional)</label>
         <select name="card_id"><option value="">Ninguna</option>${cardOptions}</select>
       </div>
       ${tpl?`
@@ -681,29 +681,47 @@ async function toggleRubro(id, checked, label){
   const { error } = await sb.from('rubros').update({pagado:checked}).eq('id', id);
   if (error) return toast('No se pudo actualizar.');
 
+  const fuente = state.cards.find(c=>c.tipo_cuenta==='debito' && c.es_fuente_pagos);
+  const origenTag = `quincena:${label}:${rubro.id}`;
+
   if (rubro.link_type === 'card' && rubro.link_id){
-    // En una tarjeta de CRÉDITO, marcar un rubro como pagado siempre significa
-    // "estoy abonando/pagando esta tarjeta" (baja la deuda), sin importar el tipo del rubro.
-    // En una tarjeta de DÉBITO, un rubro normal (fijo/variable) es un GASTO real que sale
-    // de la cuenta; solo un rubro de tipo "ingreso" representa dinero que entra.
+    // Vinculado explícitamente a una tarjeta (normalmente de crédito): marcarlo pagado
+    // siempre significa "estoy abonando/pagando esa tarjeta" (baja la deuda).
     const linkedCard = state.cards.find(c=>c.id===rubro.link_id);
     const kind = (linkedCard && linkedCard.tipo_cuenta === 'debito')
       ? (rubro.tipo === 'ingreso' ? 'abono' : 'gasto')
       : 'abono';
-    await applyCardDelta(rubro.link_id, rubro.monto, checked, `quincena:${label}:${rubro.id}`, kind);
+    await applyCardDelta(rubro.link_id, rubro.monto, checked, origenTag, kind);
   }
-  if (rubro.link_type === 'tasa0' && rubro.link_id){
+  else if (rubro.link_type === 'tasa0' && rubro.link_id){
     await sb.from('tasa0_pagos').update({pagado: checked}).eq('deuda_id', rubro.link_id).eq('quincena_label', label);
     const deuda = state.deudas.find(d=>d.id===rubro.link_id);
     if (deuda && deuda.card_id){
-      await applyCardDelta(deuda.card_id, rubro.monto, checked, `quincena:${label}:${rubro.id}`, 'abono');
+      await applyCardDelta(deuda.card_id, rubro.monto, checked, origenTag, 'abono');
+    } else if (fuente){
+      // Tasa 0 sin tarjeta de crédito asociada: la cuota sale directo de la cuenta de dinero.
+      await applyCardDelta(fuente.id, rubro.monto, checked, origenTag, 'gasto');
     }
   }
-  if (rubro.link_type === 'porcobrar' && rubro.link_id){
+  else if (rubro.link_type === 'porcobrar' && rubro.link_id){
     if (checked){
-      await sb.from('por_cobrar_abonos').insert({cobrar_id: rubro.link_id, monto: Number(rubro.monto), fecha: new Date().toISOString().slice(0,10), origen: `quincena:${label}:${rubro.id}`});
+      await sb.from('por_cobrar_abonos').insert({cobrar_id: rubro.link_id, monto: Number(rubro.monto), fecha: new Date().toISOString().slice(0,10), origen: origenTag});
     } else {
-      await sb.from('por_cobrar_abonos').delete().eq('cobrar_id', rubro.link_id).eq('origen', `quincena:${label}:${rubro.id}`);
+      await sb.from('por_cobrar_abonos').delete().eq('cobrar_id', rubro.link_id).eq('origen', origenTag);
+    }
+    const prestamo = state.porCobrar.find(p=>p.id===rubro.link_id);
+    if (prestamo && prestamo.card_id){
+      await applyCardDelta(prestamo.card_id, rubro.monto, checked, origenTag, 'abono');
+    } else if (fuente){
+      await applyCardDelta(fuente.id, rubro.monto, checked, origenTag, 'abono');
+    }
+  }
+  else {
+    // Sin vínculo explícito: por defecto, sale de (o entra a) la cuenta marcada como
+    // fuente de pagos — no hace falta vincular manualmente los gastos normales a BAC.
+    if (fuente){
+      const kind = rubro.tipo === 'ingreso' ? 'abono' : 'gasto';
+      await applyCardDelta(fuente.id, rubro.monto, checked, origenTag, kind);
     }
   }
   await loadAll();
@@ -749,7 +767,7 @@ async function applyCardDelta(cardId, monto, checked, origen, kind='abono', fech
 }
 
 function openRubroModal(label){
-  const cardOptions = state.cards.map(c=>`<option value="card:${c.id}">💳 ${c.nombre}</option>`).join('');
+  const cardOptions = state.cards.filter(c=>c.tipo_cuenta!=='debito').map(c=>`<option value="card:${c.id}">💳 ${c.nombre}</option>`).join('');
   const deudaOptions = state.deudas.map(d=>`<option value="tasa0:${d.id}">✓ ${d.concepto}</option>`).join('');
   openModal(`
     <h3>Nuevo rubro — ${labelDisplay(label)}</h3>
@@ -769,7 +787,7 @@ function openRubroModal(label){
           <option value="segunda">Solo la segunda quincena (fin de mes)</option>
         </select>
       </div>
-      <div class="field"><label>Vincular con (opcional)</label>
+      <div class="field"><label>Vincular con tarjeta de crédito o Tasa 0 (opcional)</label>
         <select name="link"><option value="">Ninguno</option>${cardOptions}${deudaOptions}</select>
       </div>
       <div class="modal-actions">
