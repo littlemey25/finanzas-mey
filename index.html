@@ -864,7 +864,7 @@ function renderTarjetas(){
     // Para débito, "Movimiento neto" = cuánto más o menos dinero hay que al inicio.
     const abonado = -movimientoNeto; // monto_inicial - saldo_actual
     const cifraResumen = esDebito ? movimientoNeto : abonado;
-    const abonos = state.cardAbonos.filter(a=>a.card_id===card.id).slice(0,6);
+    const abonos = state.cardAbonos.filter(a=>a.card_id===card.id);
     const desdeUltima = state.cardAbonos.filter(a=>
       a.card_id===card.id && a.origen.startsWith('quincena') &&
       (!card.fecha_actualizacion || a.fecha > card.fecha_actualizacion)
@@ -883,24 +883,37 @@ function renderTarjetas(){
           <div>Saldo actual<b style="color:${esDebito?'var(--green)':'var(--red)'}">${colones(card.saldo_actual)}</b></div>
         </div>
         ${desdeUltima>0?`<div class="badge-sync">${desdeUltima} movimiento(s) aplicado(s) desde tu última actualización manual</div>`:''}
-        <div class="abono-list">
-          ${abonos.length? abonos.map(a=>{
-            // La dirección real ya viene guardada en el movimiento (a.direccion). Si es un
-            // movimiento antiguo sin ese campo, se aproxima por el tipo de origen (heurística).
-            const signo = a.direccion ? (a.direccion==='suma'?1:-1)
-                        : (a.origen.startsWith('quincena') || a.origen.startsWith('manual:') || a.origen==='ajuste' || a.origen.startsWith('porcobrar'))
-                          ? accountSign(card.tipo_cuenta) : cargoSign(card.tipo_cuenta);
-            const txt = a.concepto ? a.concepto
-                      : a.origen.startsWith('fuente:quincena') ? `Pago tarjeta: ${quincenaOrigenLabel(a.origen.slice('fuente:'.length))}`
-                      : a.origen.startsWith('fuente:') ? 'Pago tarjeta de crédito'
-                      : a.origen.startsWith('quincena') ? quincenaOrigenLabel(a.origen)
-                      : a.origen.startsWith('porcobrar') ? 'Abono de por cobrar'
-                      : a.origen.startsWith('tasa0-cargo') ? 'Cargo inicial tasa 0'
-                      : a.origen.startsWith('cargo-manual') ? 'Compra manual'
-                      : a.origen.startsWith('manual') ? 'Movimiento manual' : 'Ajuste';
-            return `<div class="line"><span>${txt} — ${a.fecha}</span><span>${signo>0?'+':'-'}${colones(a.monto)}</span></div>`;
-          }).join('') : '<div class="line"><span>Sin movimientos registrados</span></div>'}
-        </div>
+        <details class="abono-details">
+          <summary>Ver movimientos (${abonos.length})</summary>
+          <div class="abono-list">
+            ${abonos.length? abonos.map(a=>{
+              // La dirección real ya viene guardada en el movimiento (a.direccion). Si es un
+              // movimiento antiguo sin ese campo, se aproxima por el tipo de origen (heurística).
+              const signo = a.direccion ? (a.direccion==='suma'?1:-1)
+                          : (a.origen.startsWith('quincena') || a.origen.startsWith('manual:') || a.origen==='ajuste' || a.origen.startsWith('porcobrar'))
+                            ? accountSign(card.tipo_cuenta) : cargoSign(card.tipo_cuenta);
+              const txt = a.concepto ? a.concepto
+                        : a.origen.startsWith('fuente:quincena') ? `Pago tarjeta: ${quincenaOrigenLabel(a.origen.slice('fuente:'.length))}`
+                        : a.origen.startsWith('fuente:') ? 'Pago tarjeta de crédito'
+                        : a.origen.startsWith('quincena') ? quincenaOrigenLabel(a.origen)
+                        : a.origen.startsWith('porcobrar') ? 'Abono de por cobrar'
+                        : a.origen.startsWith('tasa0-cargo') ? 'Cargo inicial tasa 0'
+                        : a.origen.startsWith('cargo-manual') ? 'Compra manual'
+                        : a.origen.startsWith('manual') ? 'Movimiento manual' : 'Ajuste';
+              // Solo los movimientos creados desde "+ Movimiento manual" se pueden editar/eliminar
+              // aquí; los que vienen de Quincenas, Tasa 0 o Por Cobrar deben corregirse en su
+              // sección de origen para no romper la sincronización con esos módulos.
+              const esManual = a.origen.startsWith('manual:') || a.origen.startsWith('cargo-manual:');
+              return `<div class="line">
+                <span>${txt} — ${a.fecha}</span>
+                <span style="display:flex;align-items:center;gap:6px;">
+                  ${signo>0?'+':'-'}${colones(a.monto)}
+                  ${esManual?`<button class="icon-btn-sm" data-editmov="${a.id}" title="Editar">✎</button><button class="del" data-delmov="${a.id}">×</button>`:''}
+                </span>
+              </div>`;
+            }).join('') : '<div class="line"><span>Sin movimientos registrados</span></div>'}
+          </div>
+        </details>
         <div class="card-actions">
           <button class="btn btn-sm" data-editinfo="${card.id}">✎ Datos</button>
           <button class="btn btn-sm" data-editcard="${card.id}">Actualizar saldo</button>
@@ -915,6 +928,8 @@ function renderTarjetas(){
   grid.querySelectorAll('[data-editinfo]').forEach(b=> b.onclick = ()=> openEditCardInfoModal(b.dataset.editinfo));
   grid.querySelectorAll('[data-editcard]').forEach(b=> b.onclick = ()=> openEditCardModal(b.dataset.editcard));
   grid.querySelectorAll('[data-abonocard]').forEach(b=> b.onclick = ()=> openAbonoCardModal(b.dataset.abonocard));
+  grid.querySelectorAll('[data-editmov]').forEach(b=> b.onclick = ()=> openEditMovimientoModal(b.dataset.editmov));
+  grid.querySelectorAll('[data-delmov]').forEach(b=> b.onclick = ()=> eliminarMovimientoManual(b.dataset.delmov));
   grid.querySelectorAll('[data-delcard]').forEach(b=> b.onclick = async ()=>{
     const { error } = await sb.from('cards').delete().eq('id', b.dataset.delcard);
     if (error) return toast('No se pudo eliminar.');
@@ -1111,6 +1126,75 @@ function openAbonoCardModal(id){
     const origen = (esAbono ? 'manual' : 'cargo-manual') + ':' + Date.now();
     await applyCardDelta(id, monto, true, origen, esAbono ? 'abono' : 'gasto', fd.get('fecha'), concepto);
     closeModal(); await loadAll(); toast('Movimiento registrado.', true);
+  };
+}
+
+// Revierte el efecto de UN movimiento manual sobre el saldo_actual de su tarjeta y lo borra.
+// Si ese movimiento generó una cascada hacia BAC (fuente de pagos), revierte también esa
+// contraparte, para que ambos saldos vuelvan exactamente al estado previo.
+async function revertirMovimiento(abono){
+  const card = state.cards.find(c=>c.id===abono.card_id);
+  if (card){
+    const signo = abono.direccion==='suma' ? 1 : -1;
+    const nuevo = round2(Number(card.saldo_actual) - signo*Number(abono.monto));
+    await sb.from('cards').update({saldo_actual: nuevo}).eq('id', card.id);
+  }
+  await sb.from('card_abonos').delete().eq('id', abono.id);
+  const contraparte = state.cardAbonos.find(a=> a.origen === `fuente:${abono.origen}`);
+  if (contraparte) await revertirMovimiento(contraparte);
+}
+
+async function eliminarMovimientoManual(abonoId){
+  const abono = state.cardAbonos.find(a=>a.id===abonoId);
+  if (!abono) return;
+  if (!confirm('¿Eliminar este movimiento? Se revertirá su efecto en el saldo (y en BAC, si aplicó una cascada).')) return;
+  await revertirMovimiento(abono);
+  await loadAll();
+  toast('Movimiento eliminado.', true);
+}
+
+function openEditMovimientoModal(abonoId){
+  const abono = state.cardAbonos.find(a=>a.id===abonoId);
+  if (!abono) return;
+  const card = state.cards.find(c=>c.id===abono.card_id);
+  const esDebito = card.tipo_cuenta==='debito';
+  const direccionActual = abono.direccion==='suma' ? 'abono' : 'cargo';
+  openModal(`
+    <h3>Editar movimiento — ${card.nombre}</h3>
+    <form id="f">
+      <div class="field"><label>Tipo de movimiento</label>
+        <select name="direccion">
+          ${esDebito ? `
+            <option value="abono" ${direccionActual==='abono'?'selected':''}>Ingreso (+) — entra dinero a la cuenta</option>
+            <option value="cargo" ${direccionActual==='cargo'?'selected':''}>Salida (−) — sale dinero de la cuenta</option>
+          ` : `
+            <option value="abono" ${direccionActual==='abono'?'selected':''}>Abono (−) — pagas la tarjeta, baja la deuda</option>
+            <option value="cargo" ${direccionActual==='cargo'?'selected':''}>Compra (+) — nueva compra, sube la deuda</option>
+          `}
+        </select>
+      </div>
+      <div class="field"><label>Concepto</label><input name="concepto" value="${abono.concepto||''}" required></div>
+      <div class="field"><label>Monto (₡)</label><input name="monto" type="number" step="0.01" value="${round2(abono.monto)}" required></div>
+      <div class="field"><label>Fecha</label><input name="fecha" type="date" value="${abono.fecha}"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="mCancel">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Guardar</button>
+      </div>
+    </form>
+  `);
+  document.getElementById('mCancel').onclick = closeModal;
+  document.getElementById('f').onsubmit = async (e)=>{
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const monto = Number(fd.get('monto'));
+    const concepto = fd.get('concepto');
+    const esAbono = fd.get('direccion')==='abono';
+    // Se revierte el movimiento original por completo (y su cascada, si la tuvo) y se
+    // vuelve a aplicar desde cero con los valores nuevos — evita reconciliar deltas a mano.
+    await revertirMovimiento(abono);
+    const origen = (esAbono ? 'manual' : 'cargo-manual') + ':' + Date.now();
+    await applyCardDelta(abono.card_id, monto, true, origen, esAbono ? 'abono' : 'gasto', fd.get('fecha'), concepto);
+    closeModal(); await loadAll(); toast('Movimiento actualizado.', true);
   };
 }
 
