@@ -862,11 +862,12 @@ function renderTarjetas(){
             const signo = a.direccion ? (a.direccion==='suma'?1:-1)
                         : (a.origen.startsWith('quincena') || a.origen.startsWith('manual:') || a.origen==='ajuste' || a.origen.startsWith('porcobrar'))
                           ? accountSign(card.tipo_cuenta) : cargoSign(card.tipo_cuenta);
-            const txt = a.origen.startsWith('fuente:') ? 'Pago tarjeta de crédito'
-                      : a.origen.startsWith('quincena') ? `Quincena ${labelDisplay(a.origen.split(':')[1])}`
+            const txt = a.origen.startsWith('fuente:quincena') ? `Pago tarjeta: ${quincenaOrigenLabel(a.origen.slice('fuente:'.length))}`
+                      : a.origen.startsWith('fuente:') ? 'Pago tarjeta de crédito'
+                      : a.origen.startsWith('quincena') ? quincenaOrigenLabel(a.origen)
                       : a.origen.startsWith('porcobrar') ? 'Abono de por cobrar'
                       : a.origen.startsWith('tasa0-cargo') ? 'Cargo inicial tasa 0'
-                      : a.origen.startsWith('cargo-manual') ? 'Cargo manual'
+                      : a.origen.startsWith('cargo-manual') ? 'Compra manual'
                       : a.origen.startsWith('manual') ? 'Movimiento manual' : 'Ajuste';
             return `<div class="line"><span>${txt} — ${a.fecha}</span><span>${signo>0?'+':'-'}${colones(a.monto)}</span></div>`;
           }).join('') : '<div class="line"><span>Sin movimientos registrados</span></div>'}
@@ -934,7 +935,7 @@ document.getElementById('btnNuevaTarjeta').onclick = ()=>{
       nombre: fd.get('nombre'), tipo: fd.get('tipo'), tipo_cuenta: fd.get('tipo_cuenta'), ultimos_digitos: fd.get('digitos'),
       monto_inicial: saldo, saldo_actual: saldo, fecha_actualizacion: new Date().toISOString().slice(0,10), es_fuente_pagos: esFuente
     });
-    if (error) return toast('No se pudo crear la tarjeta.');
+    if (error) return toast('No se pudo crear la tarjeta (' + error.message + '). ¿Corriste todos los scripts schema-update-*.sql en Supabase?');
     closeModal(); await loadAll(); toast('Tarjeta creada.', true);
   };
 };
@@ -983,10 +984,13 @@ function openEditCardInfoModal(id){
     if (esFuente){
       await sb.from('cards').update({es_fuente_pagos:false}).eq('es_fuente_pagos', true);
     }
-    await sb.from('cards').update({
+    const { error } = await sb.from('cards').update({
       nombre: fd.get('nombre'), tipo: fd.get('tipo'), tipo_cuenta: fd.get('tipo_cuenta'), ultimos_digitos: fd.get('digitos'),
       es_fuente_pagos: esFuente
     }).eq('id', id);
+    if (error){
+      return toast('No se pudo guardar (' + error.message + '). ¿Corriste el script schema-update-v5.sql en Supabase?');
+    }
     closeModal(); await loadAll(); toast('Tarjeta actualizada.', true);
   };
 }
@@ -1077,6 +1081,18 @@ function shortDate(isoStr){
   const [y,m,d] = isoStr.split('-').map(Number);
   const meses = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
   return `${d}-${meses[m-1]}`;
+}
+function shortDateSlash(isoStr){
+  const [y,m,d] = isoStr.split('-').map(Number);
+  return `${String(d).padStart(2,'0')}/${String(m).padStart(2,'0')}`;
+}
+// Convierte una etiqueta de origen ("quincena:2026-09-15:rubroId") en un texto legible,
+// usando el nombre del rubro que la generó cuando aún existe.
+function quincenaOrigenLabel(tag){
+  const parts = tag.split(':'); // ['quincena', 'YYYY-MM-DD', rubroId?]
+  const label = parts[1], rubroId = parts[2];
+  const rubroRef = rubroId ? state.rubros.find(r=>r.id===rubroId) : null;
+  return rubroRef ? `${rubroRef.nombre} — ${shortDateSlash(label)}` : `Quincena ${labelDisplay(label)}`;
 }
 function tasa0Rows(deuda){
   const pagosMap = {};
