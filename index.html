@@ -613,7 +613,9 @@ function renderQuincenaBlock(label, current, next){
 function openEditRubroModal(id){
   const r = state.rubros.find(x=>x.id===id);
   const tpl = r.fijo_id ? state.rubrosFijos.find(t=>t.id===r.fijo_id) : null;
-  const cardOptions = state.cards.map(c=>`<option value="${c.id}" ${r.link_type==='card' && r.link_id===c.id ? 'selected':''}>${c.nombre} (${c.tipo_cuenta==='debito'?'Débito':'Crédito'})</option>`).join('');
+  // Solo tarjetas de CRÉDITO pueden recibir un rubro vinculado (regla de negocio: BAC/débito
+  // es siempre la fuente de pagos, nunca el destino de un vínculo de rubro).
+  const cardOptions = state.cards.filter(c=>c.tipo_cuenta!=='debito').map(c=>`<option value="${c.id}" ${r.link_type==='card' && r.link_id===c.id ? 'selected':''}>${c.nombre}</option>`).join('');
   const linkRoto = r.link_type==='card' && r.link_id && !state.cards.some(c=>c.id===r.link_id);
   openModal(`
     <h3>Editar rubro</h3>
@@ -682,11 +684,15 @@ async function toggleRubro(id, checked, label){
   if (error) return toast('No se pudo actualizar.');
 
   const fuente = state.cards.find(c=>c.tipo_cuenta==='debito' && c.es_fuente_pagos);
+  if (!fuente){
+    toast('⚠ Ninguna tarjeta de débito está marcada como "fuente de pagos". BAC no se ajustará hasta que edites esa tarjeta y actives esa opción.');
+  }
   const origenTag = `quincena:${label}:${rubro.id}`;
 
   if (rubro.link_type === 'card' && rubro.link_id){
-    // Vinculado explícitamente a una tarjeta (normalmente de crédito): marcarlo pagado
-    // siempre significa "estoy abonando/pagando esa tarjeta" (baja la deuda).
+    // Vinculado explícitamente a una tarjeta de CRÉDITO: marcarlo pagado siempre significa
+    // "estoy abonando/pagando esa tarjeta" (baja la deuda) Y, por cascada dentro de
+    // applyCardDelta, baja también BAC (de ahí salió físicamente el dinero).
     const linkedCard = state.cards.find(c=>c.id===rubro.link_id);
     const kind = (linkedCard && linkedCard.tipo_cuenta === 'debito')
       ? (rubro.tipo === 'ingreso' ? 'abono' : 'gasto')
@@ -730,7 +736,7 @@ async function toggleRubro(id, checked, label){
 // Aplica (o revierte) un movimiento sobre el saldo_actual de una tarjeta y registra/quita el movimiento.
 // kind: 'abono' (dinero entra o baja la deuda) | 'gasto' (dinero sale o sube la deuda).
 // El sentido final también depende de si la cuenta es de crédito o de débito.
-async function applyCardDelta(cardId, monto, checked, origen, kind='abono', fecha=null){
+async function applyCardDelta(cardId, monto, checked, origen, kind='abono', fecha=null, concepto=null){
   const card = state.cards.find(c=>c.id===cardId);
   if (!card){
     toast('Este rubro está vinculado a una tarjeta que ya no existe — el saldo no se ajustó. Edítalo (✎) para volver a vincularlo.');
@@ -742,23 +748,27 @@ async function applyCardDelta(cardId, monto, checked, origen, kind='abono', fech
   const nuevoSaldo = round2(Number(card.saldo_actual) + delta);
   await sb.from('cards').update({saldo_actual: nuevoSaldo}).eq('id', cardId);
   if (checked){
-    await sb.from('card_abonos').insert({card_id: cardId, monto: round2(monto), origen, fecha: hoy, direccion: sign>0?'suma':'resta'});
+    await sb.from('card_abonos').insert({card_id: cardId, monto: round2(monto), origen, fecha: hoy, direccion: sign>0?'suma':'resta', concepto});
   } else {
     await sb.from('card_abonos').delete().eq('card_id', cardId).eq('origen', origen);
   }
 
-  // Cascada: si esto fue un ABONO que redujo la deuda de una tarjeta de CRÉDITO,
-  // ese dinero salió físicamente de la cuenta marcada como fuente de pagos.
+  // Cascada obligatoria: CUALQUIER abono que reduzca la deuda de una tarjeta de CRÉDITO
+  // debe reflejarse también como salida de dinero en BAC (fuente de pagos), porque de ahí
+  // sale físicamente el efectivo — sin excepción, sin importar si el rubro venía de
+  // Quincenas, Tasa 0, Por Cobrar o un movimiento manual.
   if (kind === 'abono' && card.tipo_cuenta !== 'debito'){
     const fuente = state.cards.find(c => c.tipo_cuenta === 'debito' && c.es_fuente_pagos && c.id !== cardId);
-    if (fuente){
+    if (!fuente){
+      toast('⚠ Se abonó a ' + card.nombre + ' pero ninguna tarjeta de débito está marcada como "fuente de pagos" — BAC no se ajustó. Corrígelo en ✎ Datos de tu tarjeta BAC.');
+    } else {
       const fSign = cargoSign(fuente.tipo_cuenta);
       const fDelta = (checked ? 1 : -1) * fSign * Number(monto);
       const fNuevo = round2(Number(fuente.saldo_actual) + fDelta);
       await sb.from('cards').update({saldo_actual: fNuevo}).eq('id', fuente.id);
       const origenFuente = `fuente:${origen}`;
       if (checked){
-        await sb.from('card_abonos').insert({card_id: fuente.id, monto: round2(monto), origen: origenFuente, fecha: hoy, direccion: fSign>0?'suma':'resta'});
+        await sb.from('card_abonos').insert({card_id: fuente.id, monto: round2(monto), origen: origenFuente, fecha: hoy, direccion: fSign>0?'suma':'resta', concepto: concepto ? `Pago ${card.nombre}: ${concepto}` : `Pago tarjeta: ${card.nombre}`});
       } else {
         await sb.from('card_abonos').delete().eq('card_id', fuente.id).eq('origen', origenFuente);
       }
@@ -880,7 +890,8 @@ function renderTarjetas(){
             const signo = a.direccion ? (a.direccion==='suma'?1:-1)
                         : (a.origen.startsWith('quincena') || a.origen.startsWith('manual:') || a.origen==='ajuste' || a.origen.startsWith('porcobrar'))
                           ? accountSign(card.tipo_cuenta) : cargoSign(card.tipo_cuenta);
-            const txt = a.origen.startsWith('fuente:quincena') ? `Pago tarjeta: ${quincenaOrigenLabel(a.origen.slice('fuente:'.length))}`
+            const txt = a.concepto ? a.concepto
+                      : a.origen.startsWith('fuente:quincena') ? `Pago tarjeta: ${quincenaOrigenLabel(a.origen.slice('fuente:'.length))}`
                       : a.origen.startsWith('fuente:') ? 'Pago tarjeta de crédito'
                       : a.origen.startsWith('quincena') ? quincenaOrigenLabel(a.origen)
                       : a.origen.startsWith('porcobrar') ? 'Abono de por cobrar'
@@ -1063,7 +1074,13 @@ function openAbonoCardModal(id){
     <h3>Registrar movimiento manual — ${card.nombre}</h3>
     <form id="f">
       ${esDebito ? `
-        <p style="font-size:12px;color:var(--muted);margin-top:-6px;">Esta es tu cuenta de dinero disponible: aquí solo se registran <b style="color:var(--green)">ingresos (+)</b>. Cualquier gasto o salida de dinero debe agregarse como rubro en Quincenas, para que quede reflejado ahí también.</p>
+        <p style="font-size:12px;color:var(--muted);margin-top:-6px;">Los gastos que ya son un rubro en Quincenas no deben registrarse aquí también (se duplicarían). Usa esto solo para movimientos que no pasan por un rubro, p. ej. un retiro, un cobro bancario o un ingreso extra.</p>
+        <div class="field"><label>Tipo de movimiento</label>
+          <select name="direccion">
+            <option value="abono">Ingreso (+) — entra dinero a la cuenta</option>
+            <option value="cargo">Salida (−) — sale dinero de la cuenta</option>
+          </select>
+        </div>
       ` : `
         <div class="field"><label>Tipo de movimiento</label>
           <select name="direccion">
@@ -1072,7 +1089,8 @@ function openAbonoCardModal(id){
           </select>
         </div>
       `}
-      <div class="field"><label>Monto (₡)</label><input name="monto" type="number" step="0.01" required autofocus></div>
+      <div class="field"><label>Concepto</label><input name="concepto" placeholder="${esDebito?'Ej. Retiro cajero, comisión bancaria':'Ej. Supermercado, gasolina'}" required></div>
+      <div class="field"><label>Monto (₡)</label><input name="monto" type="number" step="0.01" required></div>
       <div class="field"><label>Fecha</label><input name="fecha" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
       <div class="modal-actions">
         <button type="button" class="btn" id="mCancel">Cancelar</button>
@@ -1085,9 +1103,13 @@ function openAbonoCardModal(id){
     e.preventDefault();
     const fd = new FormData(e.target);
     const monto = Number(fd.get('monto'));
-    const esAbono = esDebito ? true : fd.get('direccion')==='abono';
+    const concepto = fd.get('concepto');
+    // Para AMBOS tipos de cuenta, "abono" es el sentido que baja saldo (deuda o dinero disponible
+    // según el signo de la cuenta) y "cargo" es el que lo sube; accountSign/cargoSign ya resuelven
+    // la diferencia entre crédito y débito, así que la etiqueta 'kind' se mantiene simétrica.
+    const esAbono = fd.get('direccion')==='abono';
     const origen = (esAbono ? 'manual' : 'cargo-manual') + ':' + Date.now();
-    await applyCardDelta(id, monto, true, origen, esAbono ? 'abono' : 'gasto', fd.get('fecha'));
+    await applyCardDelta(id, monto, true, origen, esAbono ? 'abono' : 'gasto', fd.get('fecha'), concepto);
     closeModal(); await loadAll(); toast('Movimiento registrado.', true);
   };
 }
