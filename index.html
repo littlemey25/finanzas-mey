@@ -148,13 +148,13 @@ nav.tabs button:not(.active):hover{color:var(--text);}
 .tarjetas-groups h3{font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin:0 0 10px;}
 .credit-card{
   border-radius:18px;padding:18px 20px;color:#fff;position:relative;overflow:hidden;
-  min-height:120px;display:flex;flex-direction:column;justify-content:space-between;
+  min-height:120px;display:flex;flex-direction:column;
 }
 .credit-card.visa{background:linear-gradient(135deg,#2E5C78,#3E6E8E 55%,#5C8EAE);}
 .credit-card.amex{background:linear-gradient(135deg,#6B3B70,#8B4E8F 55%,#AA6FAE);}
 .credit-card.mastercard{background:linear-gradient(135deg,#3d3d46,#54545e);}
 .credit-card .top-row{display:flex;justify-content:space-between;align-items:flex-start;font-size:11px;opacity:.85;}
-.credit-card .balance-block{text-align:center;}
+.credit-card .balance-block{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;}
 .credit-card .balance{font-size:22px;font-weight:800;letter-spacing:.01em;}
 .credit-card .balance-real{font-size:12px;font-weight:600;opacity:.85;margin-top:4px;}
 .credit-card .digits{font-size:12px;letter-spacing:.12em;opacity:.9;}
@@ -883,10 +883,19 @@ function renderTarjetas(){
 
   const ingresoActual = state.cards.filter(c=>c.tipo_cuenta==='debito').reduce((s,c)=>s+Number(c.saldo_actual),0);
   const deudaTotal = state.cards.filter(c=>c.tipo_cuenta!=='debito').reduce((s,c)=>s+Number(c.saldo_actual),0);
+  // Mismo criterio que en cada tarjeta: lo cargado a crédito por préstamos a terceros
+  // (Por Cobrar) y aún no recuperado no es deuda propia, así que se resta del total.
+  const pendienteTercerosTotal = state.porCobrar.reduce((s,p)=>{
+    const cardVinc = state.cards.find(c=>c.id===p.card_id);
+    if (!cardVinc || cardVinc.tipo_cuenta==='debito') return s;
+    const abonado = state.porCobrarAbonos.filter(a=>a.cobrar_id===p.id).reduce((s2,a)=>s2+Number(a.monto),0);
+    return s + Math.max(0, Number(p.monto_total) - abonado);
+  }, 0);
+  const deudaPropia = round2(deudaTotal - pendienteTercerosTotal);
   const resumen = document.getElementById('tarjetasResumen');
   resumen.innerHTML = `
     <div class="resumen-item"><span>Ingreso actual (débito)</span><b style="color:var(--green)">${colones(ingresoActual)}</b></div>
-    <div class="resumen-item"><span>Deuda total (crédito)</span><b style="color:var(--red)">${colones(deudaTotal)}</b></div>
+    <div class="resumen-item"><span>Deuda total (crédito)</span><b style="color:var(--red)">${colones(deudaTotal)}</b>${pendienteTercerosTotal>0.005?`<div style="margin-top:4px;font-size:11px;color:var(--muted);">Tuya: <b style="font-size:11px;color:var(--text);">${colones(deudaPropia)}</b> (${colones(pendienteTercerosTotal)} de préstamos a terceros)</div>`:''}</div>
   `;
 
   if (state.cards.length===0){
