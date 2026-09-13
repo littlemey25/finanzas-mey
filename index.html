@@ -154,7 +154,9 @@ nav.tabs button:not(.active):hover{color:var(--text);}
 .credit-card.amex{background:linear-gradient(135deg,#6B3B70,#8B4E8F 55%,#AA6FAE);}
 .credit-card.mastercard{background:linear-gradient(135deg,#3d3d46,#54545e);}
 .credit-card .top-row{display:flex;justify-content:space-between;align-items:flex-start;font-size:11px;opacity:.85;}
+.credit-card .balance-block{text-align:center;}
 .credit-card .balance{font-size:22px;font-weight:800;letter-spacing:.01em;}
+.credit-card .balance-real{font-size:12px;font-weight:600;opacity:.85;margin-top:4px;}
 .credit-card .digits{font-size:12px;letter-spacing:.12em;opacity:.9;}
 .debt-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px;}
 .desglose{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);margin:10px 0 4px;}
@@ -911,10 +913,22 @@ function renderTarjetas(){
       (!card.fecha_actualizacion || a.fecha > card.fecha_actualizacion)
     ).length;
 
+    // "Deuda real": lo cargado a esta tarjeta por préstamos a terceros (Por Cobrar) y aún
+    // no recuperado no es realmente tuyo — se resta del saldo para mostrar lo que sí es tuyo.
+    const prestamosVinculados = state.porCobrar.filter(p=>p.card_id===card.id);
+    const pendienteTerceros = prestamosVinculados.reduce((s,p)=>{
+      const abonado = state.porCobrarAbonos.filter(a=>a.cobrar_id===p.id).reduce((s2,a)=>s2+Number(a.monto),0);
+      return s + Math.max(0, Number(p.monto_total) - abonado);
+    }, 0);
+    const saldoPropio = round2(Number(card.saldo_actual) - pendienteTerceros);
+
     return `
       <div class="credit-card ${card.tipo}">
         <div class="top-row"><span>${card.nombre} ${esDebito?'· Débito':'· Crédito'}${card.es_fuente_pagos?' · 🏦 Fuente de pagos':''}</span><span class="digits">•••• ${card.ultimos_digitos||'----'}</span></div>
-        <div><div class="balance">${colones(card.saldo_actual)}</div></div>
+        <div class="balance-block">
+          <div class="balance">${colones(card.saldo_actual)}</div>
+          ${(!esDebito && pendienteTerceros>0.005)?`<div class="balance-real">Tuyo: ${colones(saldoPropio)} (₡${fmt(pendienteTerceros)} son de préstamos a terceros)</div>`:''}
+        </div>
       </div>
       <div class="debt-card">
         <div class="desglose">
