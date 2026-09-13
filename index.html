@@ -707,20 +707,38 @@ async function toggleRubro(id, checked, label){
 // Aplica (o revierte) un movimiento sobre el saldo_actual de una tarjeta y registra/quita el movimiento.
 // kind: 'abono' (dinero entra o baja la deuda) | 'gasto' (dinero sale o sube la deuda).
 // El sentido final también depende de si la cuenta es de crédito o de débito.
-async function applyCardDelta(cardId, monto, checked, origen, kind='abono'){
+async function applyCardDelta(cardId, monto, checked, origen, kind='abono', fecha=null){
   const card = state.cards.find(c=>c.id===cardId);
   if (!card){
     toast('Este rubro está vinculado a una tarjeta que ya no existe — el saldo no se ajustó. Edítalo (✎) para volver a vincularlo.');
     return;
   }
+  const hoy = fecha || new Date().toISOString().slice(0,10);
   const sign = kind==='gasto' ? cargoSign(card.tipo_cuenta) : accountSign(card.tipo_cuenta);
   const delta = (checked ? 1 : -1) * sign * Number(monto);
   const nuevoSaldo = round2(Number(card.saldo_actual) + delta);
   await sb.from('cards').update({saldo_actual: nuevoSaldo}).eq('id', cardId);
   if (checked){
-    await sb.from('card_abonos').insert({card_id: cardId, monto: round2(monto), origen, fecha: new Date().toISOString().slice(0,10)});
+    await sb.from('card_abonos').insert({card_id: cardId, monto: round2(monto), origen, fecha: hoy});
   } else {
     await sb.from('card_abonos').delete().eq('card_id', cardId).eq('origen', origen);
+  }
+
+  // Cascada: si esto fue un ABONO que redujo la deuda de una tarjeta de CRÉDITO,
+  // ese dinero salió físicamente de la cuenta marcada como fuente de pagos.
+  if (kind === 'abono' && card.tipo_cuenta !== 'debito'){
+    const fuente = state.cards.find(c => c.tipo_cuenta === 'debito' && c.es_fuente_pagos && c.id !== cardId);
+    if (fuente){
+      const fDelta = (checked ? 1 : -1) * cargoSign(fuente.tipo_cuenta) * Number(monto);
+      const fNuevo = round2(Number(fuente.saldo_actual) + fDelta);
+      await sb.from('cards').update({saldo_actual: fNuevo}).eq('id', fuente.id);
+      const origenFuente = `fuente:${origen}`;
+      if (checked){
+        await sb.from('card_abonos').insert({card_id: fuente.id, monto: round2(monto), origen: origenFuente, fecha: hoy});
+      } else {
+        await sb.from('card_abonos').delete().eq('card_id', fuente.id).eq('origen', origenFuente);
+      }
+    }
   }
 }
 
@@ -817,7 +835,7 @@ function renderTarjetas(){
     const el = document.createElement('div');
     el.innerHTML = `
       <div class="credit-card ${card.tipo}">
-        <div class="top-row"><span>${card.nombre} ${esDebito?'· Débito':'· Crédito'}</span><span class="digits">•••• ${card.ultimos_digitos||'----'}</span></div>
+        <div class="top-row"><span>${card.nombre} ${esDebito?'· Débito':'· Crédito'}${card.es_fuente_pagos?' · 🏦 Fuente de pagos':''}</span><span class="digits">•••• ${card.ultimos_digitos||'----'}</span></div>
         <div><div class="balance">${colones(card.saldo_actual)}</div></div>
       </div>
       <div class="debt-card">
@@ -829,13 +847,14 @@ function renderTarjetas(){
         ${desdeUltima>0?`<div class="badge-sync">${desdeUltima} movimiento(s) aplicado(s) desde tu última actualización manual</div>`:''}
         <div class="abono-list">
           ${abonos.length? abonos.map(a=>{
-            const esAbono = a.origen.startsWith('quincena') || a.origen==='manual' || a.origen==='ajuste' || a.origen.startsWith('porcobrar');
+            const esAbono = a.origen.startsWith('quincena') || a.origen.startsWith('manual:') || a.origen==='ajuste' || a.origen.startsWith('porcobrar');
             const signo = esAbono ? accountSign(card.tipo_cuenta) : cargoSign(card.tipo_cuenta);
-            const txt = a.origen.startsWith('quincena') ? `Quincena ${labelDisplay(a.origen.split(':')[1])}`
+            const txt = a.origen.startsWith('fuente:') ? 'Pago tarjeta de crédito'
+                      : a.origen.startsWith('quincena') ? `Quincena ${labelDisplay(a.origen.split(':')[1])}`
                       : a.origen.startsWith('porcobrar') ? 'Abono de por cobrar'
                       : a.origen.startsWith('tasa0-cargo') ? 'Cargo inicial tasa 0'
-                      : a.origen==='cargo-manual' ? 'Cargo manual'
-                      : a.origen==='manual' ? 'Movimiento manual' : 'Ajuste';
+                      : a.origen.startsWith('cargo-manual') ? 'Cargo manual'
+                      : a.origen.startsWith('manual') ? 'Movimiento manual' : 'Ajuste';
             return `<div class="line"><span>${txt} — ${a.fecha}</span><span>${signo>0?'+':'-'}${colones(a.monto)}</span></div>`;
           }).join('') : '<div class="line"><span>Sin movimientos registrados</span></div>'}
         </div>
@@ -875,6 +894,12 @@ document.getElementById('btnNuevaTarjeta').onclick = ()=>{
       </div>
       <div class="field"><label>Últimos 4 dígitos</label><input name="digitos" maxlength="4"></div>
       <div class="field"><label>Saldo actual (₡)</label><input name="saldo" type="number" step="0.01" required></div>
+      <div class="field" id="campoFuente" style="display:none;">
+        <label style="display:flex;align-items:center;gap:8px;font-weight:600;color:var(--text);">
+          <input type="checkbox" name="es_fuente_pagos" style="width:17px;height:17px;">
+          Esta es la cuenta de donde sale el dinero para pagar mis tarjetas de crédito
+        </label>
+      </div>
       <div class="modal-actions">
         <button type="button" class="btn" id="mCancel">Cancelar</button>
         <button type="submit" class="btn btn-primary">Crear</button>
@@ -882,13 +907,19 @@ document.getElementById('btnNuevaTarjeta').onclick = ()=>{
     </form>
   `);
   document.getElementById('mCancel').onclick = closeModal;
+  const tcSel = document.querySelector('#f [name=tipo_cuenta]');
+  tcSel.onchange = ()=>{ document.getElementById('campoFuente').style.display = tcSel.value==='debito' ? 'block' : 'none'; };
   document.getElementById('f').onsubmit = async (e)=>{
     e.preventDefault();
     const fd = new FormData(e.target);
     const saldo = Number(fd.get('saldo'));
+    const esFuente = fd.get('tipo_cuenta')==='debito' && fd.get('es_fuente_pagos')==='on';
+    if (esFuente){
+      await sb.from('cards').update({es_fuente_pagos:false}).eq('es_fuente_pagos', true);
+    }
     const { error } = await sb.from('cards').insert({
       nombre: fd.get('nombre'), tipo: fd.get('tipo'), tipo_cuenta: fd.get('tipo_cuenta'), ultimos_digitos: fd.get('digitos'),
-      monto_inicial: saldo, saldo_actual: saldo, fecha_actualizacion: new Date().toISOString().slice(0,10)
+      monto_inicial: saldo, saldo_actual: saldo, fecha_actualizacion: new Date().toISOString().slice(0,10), es_fuente_pagos: esFuente
     });
     if (error) return toast('No se pudo crear la tarjeta.');
     closeModal(); await loadAll(); toast('Tarjeta creada.', true);
@@ -917,6 +948,12 @@ function openEditCardInfoModal(id){
         </div>
       </div>
       <div class="field"><label>Últimos 4 dígitos</label><input name="digitos" maxlength="4" value="${card.ultimos_digitos||''}"></div>
+      <div class="field" id="campoFuente" style="display:${card.tipo_cuenta==='debito'?'block':'none'};">
+        <label style="display:flex;align-items:center;gap:8px;font-weight:600;color:var(--text);">
+          <input type="checkbox" name="es_fuente_pagos" ${card.es_fuente_pagos?'checked':''} style="width:17px;height:17px;">
+          Esta es la cuenta de donde sale el dinero para pagar mis tarjetas de crédito
+        </label>
+      </div>
       <div class="modal-actions">
         <button type="button" class="btn" id="mCancel">Cancelar</button>
         <button type="submit" class="btn btn-primary">Guardar</button>
@@ -924,11 +961,18 @@ function openEditCardInfoModal(id){
     </form>
   `);
   document.getElementById('mCancel').onclick = closeModal;
+  const tcSel2 = document.querySelector('#f [name=tipo_cuenta]');
+  tcSel2.onchange = ()=>{ document.getElementById('campoFuente').style.display = tcSel2.value==='debito' ? 'block' : 'none'; };
   document.getElementById('f').onsubmit = async (e)=>{
     e.preventDefault();
     const fd = new FormData(e.target);
+    const esFuente = fd.get('tipo_cuenta')==='debito' && fd.get('es_fuente_pagos')==='on';
+    if (esFuente){
+      await sb.from('cards').update({es_fuente_pagos:false}).eq('es_fuente_pagos', true);
+    }
     await sb.from('cards').update({
-      nombre: fd.get('nombre'), tipo: fd.get('tipo'), tipo_cuenta: fd.get('tipo_cuenta'), ultimos_digitos: fd.get('digitos')
+      nombre: fd.get('nombre'), tipo: fd.get('tipo'), tipo_cuenta: fd.get('tipo_cuenta'), ultimos_digitos: fd.get('digitos'),
+      es_fuente_pagos: esFuente
     }).eq('id', id);
     closeModal(); await loadAll(); toast('Tarjeta actualizada.', true);
   };
@@ -1003,9 +1047,8 @@ function openAbonoCardModal(id){
     const fd = new FormData(e.target);
     const monto = Number(fd.get('monto'));
     const esAbono = fd.get('direccion')==='abono';
-    const sign = esAbono ? accountSign(card.tipo_cuenta) : cargoSign(card.tipo_cuenta);
-    await sb.from('cards').update({saldo_actual: round2(Number(card.saldo_actual) + sign*monto)}).eq('id', id);
-    await sb.from('card_abonos').insert({card_id:id, monto, origen: esAbono?'manual':'cargo-manual', fecha: fd.get('fecha')});
+    const origen = (esAbono ? 'manual' : 'cargo-manual') + ':' + Date.now();
+    await applyCardDelta(id, monto, true, origen, esAbono ? 'abono' : 'gasto', fd.get('fecha'));
     closeModal(); await loadAll(); toast('Movimiento registrado.', true);
   };
 }
