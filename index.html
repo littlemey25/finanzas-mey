@@ -682,9 +682,14 @@ async function toggleRubro(id, checked, label){
   if (error) return toast('No se pudo actualizar.');
 
   if (rubro.link_type === 'card' && rubro.link_id){
-    // Un rubro normal (fijo/variable) vinculado a una tarjeta es un GASTO: sale dinero (débito)
-    // o aumenta la deuda (crédito). Un rubro de tipo "ingreso" es lo contrario: es dinero que entra.
-    const kind = rubro.tipo === 'ingreso' ? 'abono' : 'gasto';
+    // En una tarjeta de CRÉDITO, marcar un rubro como pagado siempre significa
+    // "estoy abonando/pagando esta tarjeta" (baja la deuda), sin importar el tipo del rubro.
+    // En una tarjeta de DÉBITO, un rubro normal (fijo/variable) es un GASTO real que sale
+    // de la cuenta; solo un rubro de tipo "ingreso" representa dinero que entra.
+    const linkedCard = state.cards.find(c=>c.id===rubro.link_id);
+    const kind = (linkedCard && linkedCard.tipo_cuenta === 'debito')
+      ? (rubro.tipo === 'ingreso' ? 'abono' : 'gasto')
+      : 'abono';
     await applyCardDelta(rubro.link_id, rubro.monto, checked, `quincena:${label}:${rubro.id}`, kind);
   }
   if (rubro.link_type === 'tasa0' && rubro.link_id){
@@ -719,7 +724,7 @@ async function applyCardDelta(cardId, monto, checked, origen, kind='abono', fech
   const nuevoSaldo = round2(Number(card.saldo_actual) + delta);
   await sb.from('cards').update({saldo_actual: nuevoSaldo}).eq('id', cardId);
   if (checked){
-    await sb.from('card_abonos').insert({card_id: cardId, monto: round2(monto), origen, fecha: hoy});
+    await sb.from('card_abonos').insert({card_id: cardId, monto: round2(monto), origen, fecha: hoy, direccion: sign>0?'suma':'resta'});
   } else {
     await sb.from('card_abonos').delete().eq('card_id', cardId).eq('origen', origen);
   }
@@ -729,12 +734,13 @@ async function applyCardDelta(cardId, monto, checked, origen, kind='abono', fech
   if (kind === 'abono' && card.tipo_cuenta !== 'debito'){
     const fuente = state.cards.find(c => c.tipo_cuenta === 'debito' && c.es_fuente_pagos && c.id !== cardId);
     if (fuente){
-      const fDelta = (checked ? 1 : -1) * cargoSign(fuente.tipo_cuenta) * Number(monto);
+      const fSign = cargoSign(fuente.tipo_cuenta);
+      const fDelta = (checked ? 1 : -1) * fSign * Number(monto);
       const fNuevo = round2(Number(fuente.saldo_actual) + fDelta);
       await sb.from('cards').update({saldo_actual: fNuevo}).eq('id', fuente.id);
       const origenFuente = `fuente:${origen}`;
       if (checked){
-        await sb.from('card_abonos').insert({card_id: fuente.id, monto: round2(monto), origen: origenFuente, fecha: hoy});
+        await sb.from('card_abonos').insert({card_id: fuente.id, monto: round2(monto), origen: origenFuente, fecha: hoy, direccion: fSign>0?'suma':'resta'});
       } else {
         await sb.from('card_abonos').delete().eq('card_id', fuente.id).eq('origen', origenFuente);
       }
@@ -825,7 +831,11 @@ function renderTarjetas(){
   }
   state.cards.forEach(card=>{
     const esDebito = card.tipo_cuenta === 'debito';
-    const abonado = Number(card.monto_inicial) - Number(card.saldo_actual);
+    const movimientoNeto = round2(Number(card.saldo_actual) - Number(card.monto_inicial));
+    // Para crédito, "Abonado" = cuánto se ha pagado de la deuda original (positivo = bien, pagó).
+    // Para débito, "Movimiento neto" = cuánto más o menos dinero hay que al inicio.
+    const abonado = -movimientoNeto; // monto_inicial - saldo_actual
+    const cifraResumen = esDebito ? movimientoNeto : abonado;
     const abonos = state.cardAbonos.filter(a=>a.card_id===card.id).slice(0,6);
     const desdeUltima = state.cardAbonos.filter(a=>
       a.card_id===card.id && a.origen.startsWith('quincena') &&
@@ -841,14 +851,17 @@ function renderTarjetas(){
       <div class="debt-card">
         <div class="desglose">
           <div>Monto inicial<b>${colones(card.monto_inicial)}</b></div>
-          <div>${esDebito?'Movimiento neto':'Abonado'}<b style="color:var(--green)">${colones(Math.abs(abonado))}</b></div>
+          <div>${esDebito?'Movimiento neto':'Abonado'}<b style="color:${cifraResumen>=0?'var(--green)':'var(--red)'}">${cifraResumen>=0?'+':'-'}${colones(Math.abs(cifraResumen))}</b></div>
           <div>Saldo actual<b style="color:${esDebito?'var(--green)':'var(--red)'}">${colones(card.saldo_actual)}</b></div>
         </div>
         ${desdeUltima>0?`<div class="badge-sync">${desdeUltima} movimiento(s) aplicado(s) desde tu última actualización manual</div>`:''}
         <div class="abono-list">
           ${abonos.length? abonos.map(a=>{
-            const esAbono = a.origen.startsWith('quincena') || a.origen.startsWith('manual:') || a.origen==='ajuste' || a.origen.startsWith('porcobrar');
-            const signo = esAbono ? accountSign(card.tipo_cuenta) : cargoSign(card.tipo_cuenta);
+            // La dirección real ya viene guardada en el movimiento (a.direccion). Si es un
+            // movimiento antiguo sin ese campo, se aproxima por el tipo de origen (heurística).
+            const signo = a.direccion ? (a.direccion==='suma'?1:-1)
+                        : (a.origen.startsWith('quincena') || a.origen.startsWith('manual:') || a.origen==='ajuste' || a.origen.startsWith('porcobrar'))
+                          ? accountSign(card.tipo_cuenta) : cargoSign(card.tipo_cuenta);
             const txt = a.origen.startsWith('fuente:') ? 'Pago tarjeta de crédito'
                       : a.origen.startsWith('quincena') ? `Quincena ${labelDisplay(a.origen.split(':')[1])}`
                       : a.origen.startsWith('porcobrar') ? 'Abono de por cobrar'
@@ -1015,7 +1028,7 @@ function openEditCardModal(id){
     const delta = round2(nuevo - Number(card.saldo_actual));
     await sb.from('cards').update({saldo_actual: nuevo, fecha_actualizacion: hoy}).eq('id', id);
     if (delta !== 0){
-      await sb.from('card_abonos').insert({card_id: id, monto: Math.abs(delta), origen: 'ajuste', fecha: hoy});
+      await sb.from('card_abonos').insert({card_id: id, monto: Math.abs(delta), origen: 'ajuste', fecha: hoy, direccion: delta>0?'suma':'resta'});
     }
     closeModal(); await loadAll(); toast('Saldo actualizado.', true);
   };
@@ -1027,12 +1040,16 @@ function openAbonoCardModal(id){
   openModal(`
     <h3>Registrar movimiento manual — ${card.nombre}</h3>
     <form id="f">
-      <div class="field"><label>Tipo de movimiento</label>
-        <select name="direccion">
-          <option value="abono">${esDebito?'Entrada de dinero (depósito)':'Pago / abono (reduce la deuda)'}</option>
-          <option value="cargo">${esDebito?'Salida de dinero (retiro/gasto)':'Cargo nuevo (aumenta la deuda)'}</option>
-        </select>
-      </div>
+      ${esDebito ? `
+        <p style="font-size:12px;color:var(--muted);margin-top:-6px;">Esta es tu cuenta de dinero disponible: aquí solo se registran <b style="color:var(--green)">ingresos (+)</b>. Cualquier gasto o salida de dinero debe agregarse como rubro en Quincenas, para que quede reflejado ahí también.</p>
+      ` : `
+        <div class="field"><label>Tipo de movimiento</label>
+          <select name="direccion">
+            <option value="abono">Abono (−) — pagas la tarjeta, baja la deuda</option>
+            <option value="cargo">Compra (+) — nueva compra, sube la deuda</option>
+          </select>
+        </div>
+      `}
       <div class="field"><label>Monto (₡)</label><input name="monto" type="number" step="0.01" required autofocus></div>
       <div class="field"><label>Fecha</label><input name="fecha" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
       <div class="modal-actions">
@@ -1046,7 +1063,7 @@ function openAbonoCardModal(id){
     e.preventDefault();
     const fd = new FormData(e.target);
     const monto = Number(fd.get('monto'));
-    const esAbono = fd.get('direccion')==='abono';
+    const esAbono = esDebito ? true : fd.get('direccion')==='abono';
     const origen = (esAbono ? 'manual' : 'cargo-manual') + ':' + Date.now();
     await applyCardDelta(id, monto, true, origen, esAbono ? 'abono' : 'gasto', fd.get('fecha'));
     closeModal(); await loadAll(); toast('Movimiento registrado.', true);
@@ -1229,7 +1246,7 @@ document.getElementById('btnNuevaDeuda').onclick = ()=>{
       if (card){
         const sign = cargoSign(card.tipo_cuenta);
         await sb.from('cards').update({saldo_actual: round2(Number(card.saldo_actual) + sign*monto)}).eq('id', cardId);
-        await sb.from('card_abonos').insert({card_id: cardId, monto, origen: `tasa0-cargo:${deuda.id}`, fecha: fechaInicio});
+        await sb.from('card_abonos').insert({card_id: cardId, monto, origen: `tasa0-cargo:${deuda.id}`, fecha: fechaInicio, direccion: sign>0?'suma':'resta'});
       }
     }
     closeModal(); await loadAll(); toast('Préstamo creado y calendario generado.', true);
@@ -1421,7 +1438,7 @@ function openAbonoCobrarModal(id){
       if (card){
         const sign = accountSign(card.tipo_cuenta);
         await sb.from('cards').update({saldo_actual: round2(Number(card.saldo_actual) + sign*monto)}).eq('id', card.id);
-        await sb.from('card_abonos').insert({card_id: card.id, monto, origen: `porcobrar:${id}:${Date.now()}`, fecha});
+        await sb.from('card_abonos').insert({card_id: card.id, monto, origen: `porcobrar:${id}:${Date.now()}`, fecha, direccion: sign>0?'suma':'resta'});
       }
     }
     closeModal(); await loadAll(); toast('Abono registrado.', true);
